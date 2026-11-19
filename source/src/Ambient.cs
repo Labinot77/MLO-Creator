@@ -3,7 +3,7 @@
 // green = artificial (the interior's own ambient). Full white everywhere makes every surface evenly bright.
 // Here the interior is split finer, ambient occlusion is traced against the interior itself (corners and the
 // meeting of walls, floor and ceiling get darker) and written into those channels. Doors get one even, lower value.
-// Settings: "ambient" in settings.json, e.g. { "enabled": true, "strength": 0.7, "natural": 0.55, "artificial": 0.85, "door": 0.55 }.
+// Settings: "ambient" in settings.json, e.g. { "enabled": true, "strength": 0.7, "natural": 0.55, "artificial": 0.85, "door": 0.55, "doorArtificial": 0.12 }.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -16,7 +16,7 @@ namespace MloCreator
         class AmbientSettings
         {
             public bool Enabled = true;
-            public double Grid = 0.25, Distance = 1.5, Strength = 0.7, Natural = 0.55, Artificial = 0.85, Min = 0.3, Door = 0.55;
+            public double Grid = 0.25, Distance = 1.5, Strength = 0.7, Natural = 0.55, Artificial = 0.85, Min = 0.3, Door = 0.55, DoorArtificial = 0.12;
             public int Rays = 32;
         }
 
@@ -37,6 +37,7 @@ namespace MloCreator
                 a.Artificial = Clamp(J.D(J.G(d, "artificial"), a.Artificial), 0, 1);
                 a.Min = Clamp(J.D(J.G(d, "min"), a.Min), 0, 1);
                 a.Door = Clamp(J.D(J.G(d, "door"), a.Door), 0, 1);
+                a.DoorArtificial = Clamp(J.D(J.G(d, "doorArtificial"), a.DoorArtificial), 0, 1);
                 a.Rays = (int)Clamp(J.I(J.G(d, "rays"), a.Rays), 8, 128);
             }
             catch { }
@@ -78,15 +79,16 @@ namespace MloCreator
                     verts += m.Pos.Length / 3;
                 }
 
-            byte door = (byte)Math.Round(255 * s.Door);
+            // a door is mostly seen against the outside: the sky's light (red) as set, little of the interior's lamps (green), so it does not glow at night
+            byte door = (byte)Math.Round(255 * s.Door), doorArt = (byte)Math.Round(255 * s.DoorArtificial);
             foreach (GroupData g in doors)
                 foreach (MatData m in g.Mats)
                 {
                     if (m.Glass) continue;
                     m.Col = new byte[m.Pos.Length / 3 * 4];
-                    for (int i = 0; i < m.Col.Length; i += 4) { m.Col[i] = door; m.Col[i + 1] = door; m.Col[i + 2] = 255; m.Col[i + 3] = 255; }
+                    for (int i = 0; i < m.Col.Length; i += 4) { m.Col[i] = door; m.Col[i + 1] = doorArt; m.Col[i + 2] = 255; m.Col[i + 3] = 255; }
                 }
-            log.Add("ambient: baked shading on " + verts + " vertices (natural " + s.Natural + ", artificial " + s.Artificial + "), doors " + s.Door);
+            log.Add("ambient: baked shading on " + verts + " vertices (natural " + s.Natural + ", artificial " + s.Artificial + "), doors " + s.Door + "/" + s.DoorArtificial);
         }
 
         // Splits every triangle whose longest edge is longer than grid (shared edges split once, uv / normal interpolated).
