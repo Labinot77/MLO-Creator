@@ -195,6 +195,14 @@ window.MLO = window.MLO || {};
             if (bad || dy > 0.15 || Math.abs(du) > Math.max(0.7, it.w) || Math.abs(dn) > 0.8) return;
             found.push({ r, score: Math.abs(du) + Math.abs(dn) * 0.3 + Math.abs((r.zb + r.h / 2) - (it.zb + it.h / 2)) * 0.5 });
         };
+        // an opening cut with "Cut an opening" (Door, Window or Archway): its cutter is the opening; only its distance counts, not its size
+        let kb = null; (imp().cutters || []).forEach(k => {
+            if (win ? k.type !== 'window' : (k.type !== 'door' && k.type !== 'arch')) return; if (Math.abs(Math.sin(k.yaw - yawq)) > 0.15) return;
+            const du = (k.cx - it.cx) * U[0] + (k.cy - it.cy) * U[1], dn = (k.cx - it.cx) * N[0] + (k.cy - it.cy) * N[1];
+            if (Math.abs(dn) > 1.5 || Math.abs(du) > it.w / 2 + k.w / 2 + 0.5 || k.zb > it.zb + it.h || k.zb + k.h < it.zb) return;
+            const sc = Math.abs(du) + Math.abs(dn) * 0.3; if (!kb || sc < kb.sc) kb = { sc, r: { cx: k.cx, cy: k.cy, zb: k.zb, w: k.w, h: k.h, yaw: k.yaw, cut: k } };
+        });
+        if (kb) return kb.r;
         // the faces deleted by hand (Delete faces tool) in front of / behind it: their outline is the opening
         const dr = deletedOpening(it); if (dr) accept(dr);
         if (!found.length) [-0.3, 0, 0.3].forEach(fu => [0.3, 0.5, 0.8].forEach(fz => {
@@ -206,7 +214,6 @@ window.MLO = window.MLO || {};
             });
         }));
         // the faces may be gone already (a door cut out with the Door tool): that cut remembers the opening
-        if (!found.length) (imp().cutters || []).forEach(k => { if (k.type === (win ? 'window' : 'door')) accept({ cx: k.cx, cy: k.cy, zb: k.zb, w: k.w, h: k.h, yaw: k.yaw, cut: k }); });
         if (!found.length) return null; found.sort((a, b) => a.score - b.score); return found[0].r;
     }
     // the outline of the deleted faces near a placement that stand upright and parallel to it (in its own axes), or null
@@ -237,7 +244,7 @@ window.MLO = window.MLO || {};
             if (!r) { toast('No window faces or window cut of the building near this window: move it over the window and press F again.', 'warn'); return false; }
             FM.set(frameFit(it, r)); toast('Window lined up with the building\'s window (' + r.w.toFixed(2) + ' x ' + r.h.toFixed(2) + ' m).', 'ok'); return true;
         }
-        if (!r) { toast('No door-shaped opening near this ' + it.kind + ' (no door faces, deleted faces or door cut within 1 m): set the size by hand, or put it over the building\'s door faces and try again.', 'warn'); return false; }
+        if (!r) { toast('No door-shaped opening near this ' + it.kind + ' (no cut opening within 1.5 m, no deleted or door faces within 1 m): set the size by hand, or put it over the building\'s door faces and try again.', 'warn'); return false; }
         FM.set(it.kind === 'frame' ? frameFit(it, r) : openingFit(it, r));
         toast(it.kind === 'frame' ? 'The frame\'s outside now matches the building\'s door opening (' + r.w.toFixed(2) + ' x ' + r.h.toFixed(2) + ' m).' : 'The wall cut now matches the building\'s door opening (' + r.w.toFixed(2) + ' x ' + r.h.toFixed(2) + ' m) and the door was sized to sit in it.', 'ok'); return true;
     };
