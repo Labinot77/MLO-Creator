@@ -1,0 +1,16 @@
+# per-user data the program creates next to itself (not the release build)
+projects/
+output/
+Exports/
+cache/
+logs/
+settings.json
+
+# editor / OS
+.vs/
+.vscode/
+Thumbs.db
+desktop.ini
+
+# source code folder (always track)
+!source/
