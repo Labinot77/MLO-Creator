@@ -87,10 +87,29 @@ window.MLO = window.MLO || {};
         bus.emit('shellsel');
     }
 
+    // Diagonal wall from a to b (Alt+drag in the Add room tool): it cuts off the room's corner on the side away from the room it lies in.
+    // Alt+click on one removes it.
+    function addDiag(a, b) {
+        const ds = shell().diags || [], segD = (d) => { const vx = d.b[0] - d.a[0], vy = d.b[1] - d.a[1], l2 = vx * vx + vy * vy || 1, t = Math.max(0, Math.min(1, ((a.x - d.a[0]) * vx + (a.y - d.a[1]) * vy) / l2)); return Math.hypot(a.x - d.a[0] - vx * t, a.y - d.a[1] - vy * t); };
+        if (Math.hypot(b.x - a.x, b.y - a.y) < 0.2) {
+            const i = ds.findIndex(d => segD(d) < 0.3); if (i < 0) return;
+            Model.edit(P => { P.shell.diags.splice(i, 1); }); toast('Diagonal wall removed.', 'ok'); return;
+        }
+        if (Math.abs(b.x - a.x) < 0.05 || Math.abs(b.y - a.y) < 0.05) { toast('That line is straight: draw a room for it. A diagonal wall goes across a room\'s corner.', 'warn'); return; }
+        // the room's side: the middle of the room the line's middle is in (else of all the rooms)
+        const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2, adds = shell().ops.filter(o => o.op === 'add'), inn = adds.filter(o => mx > o.r[0] && mx < o.r[2] && my > o.r[1] && my < o.r[3]), use = inn.length ? inn : adds;
+        if (!use.length) { toast('Draw the room first, then the diagonal wall across its corner.', 'warn'); return; }
+        const cx = use.reduce((s, o) => s + o.r[0] + o.r[2], 0) / (2 * use.length), cy = use.reduce((s, o) => s + o.r[1] + o.r[3], 0) / (2 * use.length);
+        const s = (b.x - a.x) * (cy - a.y) - (b.y - a.y) * (cx - a.x) >= 0 ? 1 : -1, r4 = (v) => Math.round(v * 10000) / 10000;
+        Model.edit(P => { (P.shell.diags = P.shell.diags || []).push({ a: [r4(a.x), r4(a.y)], b: [r4(b.x), r4(b.y)], s }); });
+        toast('Diagonal wall added (' + Math.hypot(b.x - a.x, b.y - a.y).toFixed(2) + ' m). Alt+click it to remove it.', 'ok');
+    }
+
     function down(e) {
         const t = S.shellTool, g = ground(e); hover = { g, pick: g ? pick(g.ray) : null };
         if (!g) return;
-        if (t === 'room' || t === 'cut' || t === 'floor') drag = { tool: t, a: g, b: g };
+        if (t === 'room' && e.altKey) drag = { tool: 'diag', a: g, b: g };                       // Alt: a diagonal wall
+        else if (t === 'room' || t === 'cut' || t === 'floor') drag = { tool: t, a: g, b: g };
         else if (t === 'part') drag = { tool: t, a: g, b: g };
         else if (t === 'door' || t === 'window' || t === 'arch') { const p = hover.pick; if (p) addOpening(p, t); }
         else if (t === 'select') {
@@ -128,6 +147,7 @@ window.MLO = window.MLO || {};
 
     function up(e) {
         if (!drag) return; const d = drag; drag = null;
+        if (d.tool === 'diag') { addDiag(d.a, d.b); return; }
         if (d.tool === 'room' || d.tool === 'cut') {
             const r = normRect(d.a, d.b); if (r[2] - r[0] < 0.2 || r[3] - r[1] < 0.2) return;
             Model.edit(P => { P.shell.ops.push({ op: d.tool === 'room' ? 'add' : 'cut', r }); });
@@ -171,6 +191,9 @@ window.MLO = window.MLO || {};
         if (drag && (drag.tool === 'room' || drag.tool === 'cut' || drag.tool === 'floor')) {
             const r = normRect(drag.a, drag.b); quad(r, drag.tool === 'cut' ? C.cut : (drag.tool === 'floor' ? C.paint : C.ghost));
             lbl = (r[2] - r[0]).toFixed(2) + ' x ' + (r[3] - r[1]).toFixed(2) + ' m'; at = [(r[0] + r[2]) / 2, (r[1] + r[3]) / 2, 0.15];
+        } else if (drag && drag.tool === 'diag') {
+            R.ovTopLine([drag.a.x, drag.a.y, 0.05], [drag.b.x, drag.b.y, 0.05], [1, 0.85, 0.2, 1]);
+            lbl = Math.hypot(drag.b.x - drag.a.x, drag.b.y - drag.a.y).toFixed(2) + ' m'; at = [(drag.a.x + drag.b.x) / 2, (drag.a.y + drag.b.y) / 2, 0.15];
         } else if (drag && drag.tool === 'part') {
             const horiz = Math.abs(drag.b.x - drag.a.x) >= Math.abs(drag.b.y - drag.a.y), len = horiz ? Math.abs(drag.b.x - drag.a.x) : Math.abs(drag.b.y - drag.a.y);
             const x0 = Math.min(drag.a.x, drag.b.x), x1 = Math.max(drag.a.x, drag.b.x), y0 = Math.min(drag.a.y, drag.b.y), y1 = Math.max(drag.a.y, drag.b.y), h = PT / 2;

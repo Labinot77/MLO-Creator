@@ -43,6 +43,22 @@ window.MLO = window.MLO || {};
         return { X, Y, nx, ny, mask };
     }
 
+    // Diagonal walls: shell.diags = [{ a: [x, y], b: [x, y], s }]. Each cuts off what lies inside the box spanned by a and b on the side of the line a-b
+    // away from the room (s = the sign of cross(b - a, p - a) on the room's side), so a room's corner can follow a slanted wall of the building.
+    const side = (d, x, y) => ((d.b[0] - d.a[0]) * (y - d.a[1]) - (d.b[1] - d.a[1]) * (x - d.a[0])) * d.s;
+    const inBox = (d, x, y, e) => x > Math.min(d.a[0], d.b[0]) - e && x < Math.max(d.a[0], d.b[0]) + e && y > Math.min(d.a[1], d.b[1]) - e && y < Math.max(d.a[1], d.b[1]) + e;
+    function diagCut(shell, x, y) { return (shell.diags || []).some(d => inBox(d, x, y, 1e-4) && side(d, x, y) < -1e-6); }
+    // a polygon ([[x, y]...]) clipped to the room's side of every diagonal it reaches (Sutherland-Hodgman, one line at a time)
+    function diagClip(shell, poly) {
+        (shell.diags || []).forEach(d => {
+            if (!poly.length || !poly.some(p => inBox(d, p[0], p[1], -1e-4)) && !inBox(d, (poly[0][0] + poly[2][0]) / 2, (poly[0][1] + poly[2][1]) / 2, -1e-4)) return;
+            const out = []; poly.forEach((p, i) => { const q = poly[(i + 1) % poly.length], sp = side(d, p[0], p[1]), sq = side(d, q[0], q[1]);
+                if (sp >= 0) out.push(p); if ((sp >= 0) !== (sq >= 0)) { const t = sp / (sp - sq); out.push([p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]); } });
+            poly = out;
+        });
+        return poly;
+    }
+
     // wall segments along the boundary of the region; inward = which side of the wall line the room is on (+1 = towards +x / +y)
     function boundary(g) {
         const segs = [];
@@ -146,8 +162,9 @@ window.MLO = window.MLO || {};
         // ---------------- region, floors, ceiling ----------------
         const fx = [], fy = [];
         (S.floors || []).forEach(f => { fx.push(f.r[0], f.r[2]); fy.push(f.r[1], f.r[3]); });
-        const g = regionGrid(S, fx, fy);
-        const inRegion = (x, y) => { for (let i = 0; i < g.nx; i++) if (x >= g.X[i] && x < g.X[i + 1]) { for (let j = 0; j < g.ny; j++) if (y >= g.Y[j] && y < g.Y[j + 1]) return g.mask[i][j]; } return false; };
+        (S.diags || []).forEach(d => { fx.push(d.a[0], d.b[0]); fy.push(d.a[1], d.b[1]); });
+        const g = regionGrid(S, fx, fy), diagAt = (i, j) => (S.diags || []).some(d => inBox(d, (g.X[i] + g.X[i + 1]) / 2, (g.Y[j] + g.Y[j + 1]) / 2, 0));
+        const inRegion = (x, y) => { if (diagCut(S, x, y)) return false; for (let i = 0; i < g.nx; i++) if (x >= g.X[i] && x < g.X[i + 1]) { for (let j = 0; j < g.ny; j++) if (y >= g.Y[j] && y < g.Y[j + 1]) return g.mask[i][j]; } return false; };
         const floorTexAt = (cx, cy) => { let t = D.floor; (S.floors || []).forEach(f => { if (cx > f.r[0] && cx < f.r[2] && cy > f.r[1] && cy < f.r[3]) t = f.tex; }); return t; };
         {
             const cells = [], used = [];
@@ -155,8 +172,15 @@ window.MLO = window.MLO || {};
             const texOf = (i, j) => g.mask[i][j] ? floorTexAt((g.X[i] + g.X[i + 1]) / 2, (g.Y[j] + g.Y[j + 1]) / 2) : null;
             cells.forEach(c => {
                 const i = c[0], j = c[1]; if (used[i][j]) return; const tex = c[2];
-                let i1 = i + 1; while (i1 < g.nx && !used[i1][j] && texOf(i1, j) === tex) i1++;
-                let j1 = j + 1; for (; j1 < g.ny; j1++) { let ok = true; for (let x = i; x < i1; x++) if (used[x][j1] || texOf(x, j1) !== tex) { ok = false; break; } if (!ok) break; }
+                if (diagAt(i, j)) {
+                    // a cell a diagonal goes through: its floor and ceiling are cut along the diagonal (the collision stays the whole cell, under the floor / above the ceiling)
+                    used[i][j] = true; const x0 = g.X[i], x1 = g.X[i + 1], y0 = g.Y[j], y1 = g.Y[j + 1], P = diagClip(S, [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]);
+                    for (let k = 1; k + 1 < P.length; k++) { emitTri('floor', 'int', tex, [P[0][0], P[0][1], 0], [P[k][0], P[k][1], 0], [P[k + 1][0], P[k + 1][1], 0]); emitTri('roof', 'int', D.ceiling, [P[0][0], P[0][1], H], [P[k + 1][0], P[k + 1][1], H], [P[k][0], P[k][1], H]); }
+                    if (P.length > 2) { cbox(x0, y0, -0.35, x1, y1, 0, TEX.colType(tex), 1); cbox(x0, y0, H, x1, y1, H + 0.1, 101, 0); }
+                    return;
+                }
+                let i1 = i + 1; while (i1 < g.nx && !used[i1][j] && !diagAt(i1, j) && texOf(i1, j) === tex) i1++;
+                let j1 = j + 1; for (; j1 < g.ny; j1++) { let ok = true; for (let x = i; x < i1; x++) if (used[x][j1] || diagAt(x, j1) || texOf(x, j1) !== tex) { ok = false; break; } if (!ok) break; }
                 for (let x = i; x < i1; x++) for (let y = j; y < j1; y++) used[x][y] = true;
                 const x0 = g.X[i], x1 = g.X[i1], y0 = g.Y[j], y1 = g.Y[j1];
                 pq('floor', 'int', tex, false, 'z', 0, x0, x1, y0, y1, 1);
@@ -167,7 +191,19 @@ window.MLO = window.MLO || {};
         }
 
         // ---------------- walls around the region ----------------
-        const segs = boundary(g);
+        let segs = boundary(g);
+        if ((S.diags || []).length) {
+            const pt = (sg, u) => sg.o === 'H' ? [u, sg.c] : [sg.c, u], out = [];
+            segs.forEach(sg => {
+                const cuts = [sg.u0, sg.u1]; S.diags.forEach(d => [0, 1].forEach(k => { const u = sg.o === 'H' ? d[k ? 'b' : 'a'][0] : d[k ? 'b' : 'a'][1]; if (u > sg.u0 && u < sg.u1) cuts.push(u); }));
+                const us = uniq(cuts); let cur = null;
+                for (let k = 0; k + 1 < us.length; k++) {
+                    const m = pt(sg, (us[k] + us[k + 1]) / 2), keep = !diagCut(S, m[0], m[1]);
+                    if (keep && cur && Math.abs(cur.u1 - us[k]) < 1e-6) cur.u1 = us[k + 1]; else if (keep) { cur = Object.assign({}, sg, { u0: us[k], u1: us[k + 1], ops: [] }); out.push(cur); } else cur = null;
+                }
+            });
+            segs = out;
+        }
         const entranceOpen = (S.openings || []).find(o => o.entrance);
         (S.openings || []).forEach(op => {
             let best = null, bo = 0;
@@ -281,6 +317,16 @@ window.MLO = window.MLO || {};
                 cur = op.u1;
             });
             wallPiece(sg, cur, sg.u1, 0, H, first ? ext0 : 0, ext0);
+        });
+
+        // ---------------- diagonal walls ----------------
+        (S.diags || []).forEach(d => {
+            const dx = d.b[0] - d.a[0], dy = d.b[1] - d.a[1], L = Math.hypot(dx, dy); if (L < 0.05) return;
+            const nx = -dy / L * d.s, ny = dx / L * d.s, a = [d.a[0] + nx * T, d.a[1] + ny * T], b = [d.b[0] + nx * T, d.b[1] + ny * T];          // (n: towards the room)
+            const p = d.s > 0 ? b : a, q = d.s > 0 ? a : b;
+            if (!skin) emitQuad('wall', 'int', D.wallInt, false, [p[0], p[1], 0], [q[0], q[1], 0], [q[0], q[1], H], [p[0], p[1], H]);          // (wound so its normal looks into the room)
+            const th = Math.max(0.05, T + outD), off = T - th / 2;
+            cboxO((d.a[0] + d.b[0]) / 2 + nx * off, (d.a[1] + d.b[1]) / 2 + ny * off, 0, H, L / 2 + th / 2, th / 2, Math.atan2(dy, dx), TEX.colType(D.wallInt), 0, 'diag');
         });
 
         // ---------------- the building's own walls, turned inwards (walls = 'skin') ----------------
@@ -462,5 +508,5 @@ window.MLO = window.MLO || {};
         return out;
     }
 
-    M.Shell = { build, regionGrid, regionRects, boundary, OPEN, uniq };
+    M.Shell = { build, regionGrid, diagCut, regionRects, boundary, OPEN, uniq };
 })(window.MLO);
