@@ -177,9 +177,14 @@ window.MLO = window.MLO || {};
         const k = r.cut; if (!k) return [it.cx, it.cy]; const { N } = axes(it), kn = [-Math.sin(k.yaw), Math.cos(k.yaw)], dd = IM.depthOf(k), px = k.cx + kn[0] * dd, py = k.cy + kn[1] * dd, dn = (px - it.cx) * N[0] + (py - it.cy) * N[1];
         return [it.cx + N[0] * dn, it.cy + N[1] * dn];
     }
+    // a window just behind the building's own window face (the face's normal points out), so the face hides it from outside
+    function behindFace(it, r) {
+        const { N } = axes(it), kn = [-Math.sin(r.yaw), Math.cos(r.yaw)], b = it.d / 2 + 0.02, px = r.cx - kn[0] * b, py = r.cy - kn[1] * b, dn = (px - it.cx) * N[0] + (py - it.cy) * N[1];
+        return [it.cx + N[0] * dn, it.cy + N[1] * dn];
+    }
     // a frame or a window put to the building's opening: its outside is the opening (its depth stays, unless the opening was cut: then it goes to the frame's depth)
     function frameFit(it, r) {
-        const { U } = axes(it), along = (r.cx - it.cx) * U[0] + (r.cy - it.cy) * U[1], c = it.kind === 'window' ? [it.cx, it.cy] : acrossTo(it, r), yaw = snapYaw(Math.abs(Math.sin(r.yaw - it.yaw)) < 0.26 ? (Math.cos(r.yaw - it.yaw) > 0 ? r.yaw : r.yaw + Math.PI) : it.yaw);
+        const { U } = axes(it), along = (r.cx - it.cx) * U[0] + (r.cy - it.cy) * U[1], c = it.kind === 'window' ? behindFace(it, r) : acrossTo(it, r), yaw = snapYaw(Math.abs(Math.sin(r.yaw - it.yaw)) < 0.26 ? (Math.cos(r.yaw - it.yaw) > 0 ? r.yaw : r.yaw + Math.PI) : it.yaw);
         return { cx: r3(c[0] + U[0] * along), cy: r3(c[1] + U[1] * along), zb: r.zb < 0.02 ? 0 : r3(r.zb), w: r3(r.w), h: r3(r.h), yaw: r3(yaw) };
     }
     // The door-shaped opening of the building behind a door (the faces the building has where its own door is: the "door cut" the wall is measured from): the flat patch of faces that
