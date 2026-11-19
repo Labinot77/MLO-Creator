@@ -185,10 +185,10 @@ window.MLO = window.MLO || {};
         return best;
     }
     // a window just behind the building's own window face (the face's normal points out), so the face hides it from outside, and no deeper than the
-    // wall up to the room's inner surface, so it fills the wall's thickness (its frame hides the sides of the cut) and does not stick into the room
+    // wall up to the room's inner surface, so it does not stick into the room; never deeper than the model itself (no stretching)
     function behindFace(it, r) {
         const { N } = axes(it), kn = [-Math.sin(r.yaw), Math.cos(r.yaw)], t = toRoom([r.cx, r.cy], [-kn[0], -kn[1]]);
-        const d = t != null ? r3(Math.max(0.03, t - 0.02)) : it.d, b = d / 2 + 0.02, px = r.cx - kn[0] * b, py = r.cy - kn[1] * b, dn = (px - it.cx) * N[0] + (py - it.cy) * N[1];
+        const m = FM.model(it.m), own = m ? r3(Math.max(0.03, m.size[1])) : it.d, room = t != null ? t - 0.02 : 1e9, d = room >= 0.03 ? r3(Math.min(own, room)) : own, b = d / 2 + 0.02, px = r.cx - kn[0] * b, py = r.cy - kn[1] * b, dn = (px - it.cx) * N[0] + (py - it.cy) * N[1];
         return { c: [it.cx + N[0] * dn, it.cy + N[1] * dn], d };
     }
     // a frame or a window put to the building's opening: its outside is the opening (its depth stays, unless the opening was cut: then it goes to the frame's depth)
