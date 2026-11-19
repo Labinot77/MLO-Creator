@@ -336,6 +336,8 @@ window.MLO = window.MLO || {};
             if (m.indexOf('e') >= 0) r[2] = Math.max(snap(p[0] + k.off[0], L.xs), r0[0] + MIN);
             if (m.indexOf('s') >= 0) r[1] = Math.min(snap(p[1] + k.off[1], L.ys), r0[3] - MIN);
             if (m.indexOf('n') >= 0) r[3] = Math.max(snap(p[1] + k.off[1], L.ys), r0[1] + MIN);
+            const c = (m.length === 2 && !free) ? SH.corner(p[0] + k.off[0], p[1] + k.off[1]) : null;
+            if (c) { const xi = m.indexOf('w') >= 0 ? 0 : 2, yi = m.indexOf('s') >= 0 ? 1 : 3; if (Math.abs(c[0] - r0[2 - xi]) >= MIN) r[xi] = c[0]; if (Math.abs(c[1] - r0[4 - yi]) >= MIN) r[yi] = c[1]; }
         }
         r = r.map(v => Math.round(v * 10000) / 10000);
         if (k.cur && r.every((v, j) => v === k.cur[j])) return;

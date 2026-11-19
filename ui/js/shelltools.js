@@ -4,7 +4,7 @@ window.MLO = window.MLO || {};
     'use strict';
     const { Model, Shell } = M, S = Model.state, bus = Model.bus;
     const C = { ghost: [0.31, 0.55, 1.0, 0.36], cut: [0.92, 0.40, 0.30, 0.38], edge: [0.55, 0.75, 1.0, 0.95], hi: [1, 0.85, 0.35, 0.5], sel: [0.35, 0.9, 0.55, 0.55], cand: [0.4, 0.9, 0.5, 0.20], erase: [0.92, 0.32, 0.32, 0.45], paint: [0.95, 0.75, 0.3, 0.38] };
-    const SNAP = 0.05, LINE_SNAP = 0.09;
+    const SNAP = 0.05, LINE_SNAP = 0.09, CORNER_SNAP = 0.3;
     const randId = () => Math.random().toString(36).slice(2, 7);
 
     let hover = null, drag = null;
@@ -28,7 +28,14 @@ window.MLO = window.MLO || {};
     }
     function ground(e) {
         const ray = api().pointerRay(e), ph = api().planeHit(ray, 0); if (!ph) return null;
+        const c = e.shiftKey ? null : corner(ph.x, ph.y); if (c) return { x: c[0], y: c[1], rx: ph.x, ry: ph.y, ray, corner: true };
         const L = lines(); return { x: snapTo(ph.x, L.xs), y: snapTo(ph.y, L.ys), rx: ph.x, ry: ph.y, ray };
+    }
+    // the nearest corner of the building's walls within CORNER_SNAP of a ground point, or null
+    function corner(x, y) {
+        if (S.project.kind !== 'import' || !M.ImportModel) return null;
+        let best = null, bd = CORNER_SNAP; M.ImportModel.wallCorners().forEach(c => { const d = Math.hypot(c[0] - x, c[1] - y); if (d < bd) { bd = d; best = c; } });
+        return best;
     }
 
     // wall under the pointer: boundary segment of the room or a partition
@@ -139,6 +146,8 @@ window.MLO = window.MLO || {};
     function draw(R, label) {
         const H = cfg().ceilH, depth = cfg().wallDepth, PT = cfg().partT, z = 0.012, b = M.App.built, sh = shell(), t = S.shellTool;
         const quad = (r, col) => R.ovQuad([r[0], r[1], z], [r[2], r[1], z], [r[2], r[3], z], [r[0], r[3], z], col);
+        // the wall corner the pointer is held to
+        const hg = hover && hover.g; if (hg && hg.corner) { const s = 0.18, cc = [1, 0.85, 0.2, 1]; R.ovTopLine([hg.x - s, hg.y, z], [hg.x + s, hg.y, z], cc); R.ovTopLine([hg.x, hg.y - s, z], [hg.x, hg.y + s, z], cc); }
         // entrance arrow
         const legacy = S.project.kind === 'vanilla', ez = 0.02;
         if (legacy) { R.ovQuad([-0.28, -0.7, ez], [0.28, -0.7, ez], [0, -0.05, ez], [0, -0.05, ez], [0.25, 0.85, 0.5, 0.85]); R.ovQuad([-0.1, -1.2, ez], [0.1, -1.2, ez], [0.1, -0.7, ez], [-0.1, -0.7, ez], [0.25, 0.85, 0.5, 0.85]); }
@@ -209,5 +218,5 @@ window.MLO = window.MLO || {};
     let labelFn = null;
     function label(text, at) { if (labelFn) labelFn(text, at); }
 
-    M.ShellTools = { down, move, up, draw, key, deleteSelected, pick, ground, openingAt, snapTo, lines, cancel() { drag = null; }, setLabel(f) { labelFn = f; }, get hover() { return hover; }, get dragging() { return drag ? drag.tool : null; } };
+    M.ShellTools = { down, move, up, draw, key, deleteSelected, pick, ground, openingAt, snapTo, lines, corner, cancel() { drag = null; }, setLabel(f) { labelFn = f; }, get hover() { return hover; }, get dragging() { return drag ? drag.tool : null; } };
 })(window.MLO);
