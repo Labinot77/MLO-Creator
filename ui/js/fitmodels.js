@@ -177,15 +177,24 @@ window.MLO = window.MLO || {};
         const k = r.cut; if (!k) return [it.cx, it.cy]; const { N } = axes(it), kn = [-Math.sin(k.yaw), Math.cos(k.yaw)], dd = IM.depthOf(k), px = k.cx + kn[0] * dd, py = k.cy + kn[1] * dd, dn = (px - it.cx) * N[0] + (py - it.cy) * N[1];
         return [it.cx + N[0] * dn, it.cy + N[1] * dn];
     }
-    // a window just behind the building's own window face (the face's normal points out), so the face hides it from outside
+    // how far a room's inner surface (the edge of an added rectangle) is from point p going along d, or null (within 1.5 m)
+    function toRoom(p, d) {
+        let best = null; (S.project.shell.ops || []).forEach(o => { if (o.op === 'cut') return; const r = o.r;
+            [[0, r[0]], [0, r[2]], [1, r[1]], [1, r[3]]].forEach(e => { const a = e[0], dv = d[a]; if (Math.abs(dv) < 1e-6) return; const t = (e[1] - p[a]) / dv, q = p[1 - a] + d[1 - a] * t;
+                if (t > 0.01 && t < 1.5 && q >= r[1 - a] - 0.01 && q <= r[3 - a] + 0.01 && (best == null || t < best)) best = t; }); });
+        return best;
+    }
+    // a window just behind the building's own window face (the face's normal points out), so the face hides it from outside, and no deeper than the
+    // wall up to the room's inner surface, so it fills the wall's thickness (its frame hides the sides of the cut) and does not stick into the room
     function behindFace(it, r) {
-        const { N } = axes(it), kn = [-Math.sin(r.yaw), Math.cos(r.yaw)], b = it.d / 2 + 0.02, px = r.cx - kn[0] * b, py = r.cy - kn[1] * b, dn = (px - it.cx) * N[0] + (py - it.cy) * N[1];
-        return [it.cx + N[0] * dn, it.cy + N[1] * dn];
+        const { N } = axes(it), kn = [-Math.sin(r.yaw), Math.cos(r.yaw)], t = toRoom([r.cx, r.cy], [-kn[0], -kn[1]]);
+        const d = t != null ? r3(Math.max(0.03, t - 0.02)) : it.d, b = d / 2 + 0.02, px = r.cx - kn[0] * b, py = r.cy - kn[1] * b, dn = (px - it.cx) * N[0] + (py - it.cy) * N[1];
+        return { c: [it.cx + N[0] * dn, it.cy + N[1] * dn], d };
     }
     // a frame or a window put to the building's opening: its outside is the opening (its depth stays, unless the opening was cut: then it goes to the frame's depth)
     function frameFit(it, r) {
-        const { U } = axes(it), along = (r.cx - it.cx) * U[0] + (r.cy - it.cy) * U[1], c = it.kind === 'window' ? behindFace(it, r) : acrossTo(it, r), yaw = snapYaw(Math.abs(Math.sin(r.yaw - it.yaw)) < 0.26 ? (Math.cos(r.yaw - it.yaw) > 0 ? r.yaw : r.yaw + Math.PI) : it.yaw);
-        return { cx: r3(c[0] + U[0] * along), cy: r3(c[1] + U[1] * along), zb: r.zb < 0.02 ? 0 : r3(r.zb), w: r3(r.w), h: r3(r.h), yaw: r3(yaw) };
+        const { U } = axes(it), along = (r.cx - it.cx) * U[0] + (r.cy - it.cy) * U[1], bf = it.kind === 'window' ? behindFace(it, r) : null, c = bf ? bf.c : acrossTo(it, r), yaw = snapYaw(Math.abs(Math.sin(r.yaw - it.yaw)) < 0.26 ? (Math.cos(r.yaw - it.yaw) > 0 ? r.yaw : r.yaw + Math.PI) : it.yaw);
+        return { cx: r3(c[0] + U[0] * along), cy: r3(c[1] + U[1] * along), zb: r.zb < 0.02 ? 0 : r3(r.zb), w: r3(r.w), h: r3(r.h), yaw: r3(yaw), d: bf ? bf.d : it.d };
     }
     // The door-shaped opening of the building behind a door (the faces the building has where its own door is: the "door cut" the wall is measured from): the flat patch of faces that
     // is about as tall as a door and starts near the floor, found by looking along the wall's normal through the door's area, from outside and from inside. Null when there is none (the
