@@ -172,22 +172,28 @@ window.MLO = window.MLO || {};
         const ox = fr.cx + FU[0] * fi.cu, oy = fr.cy + FU[1] * fi.cu, along = (ox - it.cx) * U[0] + (oy - it.cy) * U[1], across = (fr.cx - it.cx) * N[0] + (fr.cy - it.cy) * N[1];
         return { cx: r3(it.cx + U[0] * along + N[0] * across), cy: r3(it.cy + U[1] * along + N[1] * across), zb: fi.zb < 0.02 ? 0 : r3(fi.zb), w: r3(Math.max(0.5, fi.w - 2 * rm.gap)), h: r3(Math.max(1.5, fi.h - 0.02)), cut: { w: r3(fi.w), h: r3(fi.h), du: 0, dz: 0 } };
     }
-    // a frame put to the building's door opening: its outside is the opening (its depth and its place across the wall stay)
+    // across the wall: an opening cut with the Door / Window tool puts the model at the depth of its frame (k.dd behind the cut faces); faces still there leave it where it is
+    function acrossTo(it, r) {
+        const k = r.cut; if (!k) return [it.cx, it.cy]; const { N } = axes(it), kn = [-Math.sin(k.yaw), Math.cos(k.yaw)], dd = IM.depthOf(k), px = k.cx + kn[0] * dd, py = k.cy + kn[1] * dd, dn = (px - it.cx) * N[0] + (py - it.cy) * N[1];
+        return [it.cx + N[0] * dn, it.cy + N[1] * dn];
+    }
+    // a frame or a window put to the building's opening: its outside is the opening (its depth stays, unless the opening was cut: then it goes to the frame's depth)
     function frameFit(it, r) {
-        const { U } = axes(it), along = (r.cx - it.cx) * U[0] + (r.cy - it.cy) * U[1];
-        return { cx: r3(it.cx + U[0] * along), cy: r3(it.cy + U[1] * along), zb: r.zb < 0.02 ? 0 : r3(r.zb), w: r3(r.w), h: r3(r.h) };
+        const { U } = axes(it), along = (r.cx - it.cx) * U[0] + (r.cy - it.cy) * U[1], c = it.kind === 'window' ? [it.cx, it.cy] : acrossTo(it, r), yaw = snapYaw(Math.abs(Math.sin(r.yaw - it.yaw)) < 0.26 ? (Math.cos(r.yaw - it.yaw) > 0 ? r.yaw : r.yaw + Math.PI) : it.yaw);
+        return { cx: r3(c[0] + U[0] * along), cy: r3(c[1] + U[1] * along), zb: r.zb < 0.02 ? 0 : r3(r.zb), w: r3(r.w), h: r3(r.h), yaw: r3(yaw) };
     }
     // The door-shaped opening of the building behind a door (the faces the building has where its own door is: the "door cut" the wall is measured from): the flat patch of faces that
     // is about as tall as a door and starts near the floor, found by looking along the wall's normal through the door's area, from outside and from inside. Null when there is none (the
     // faces may be deleted already). Returns the rectangle of the faces (IM.faceRect: middle, bottom, width, height, in the grid's frame).
     function findOpening(it) {
-        const { U, N } = axes(it), seen = new Set(), found = [], tfile = (IM.targetModel() || {}).file, yawq = it.yaw;
+        const { U, N } = axes(it), seen = new Set(), found = [], tfile = (IM.targetModel() || {}).file, yawq = it.yaw, win = it.kind === 'window';
         // a rectangle that is a door-shaped opening near this placement: about as tall as a door, starting near the floor, parallel to it, close to it along and across the wall
         const accept = (r) => {
             let dy = Math.abs((((r.yaw - yawq) % Math.PI) + Math.PI * 1.5) % Math.PI - Math.PI / 2); dy = Math.min(dy, Math.PI - dy);
             const du = (r.cx - it.cx) * U[0] + (r.cy - it.cy) * U[1], dn = (r.cx - it.cx) * N[0] + (r.cy - it.cy) * N[1];
-            if (r.w < 0.6 || r.w > 2.6 || r.h < 1.7 || r.h > 2.7 || r.zb > 0.45 || r.zb < -0.3 || dy > 0.15 || Math.abs(du) > Math.max(0.7, it.w) || Math.abs(dn) > 0.8) return;
-            found.push({ r, score: Math.abs(du) + Math.abs(dn) * 0.3 });
+            const bad = win ? (r.w < 0.25 || r.w > 4 || r.h < 0.25 || r.h > 3 || r.zb < 0.1) : (r.w < 0.6 || r.w > 2.6 || r.h < 1.7 || r.h > 2.7 || r.zb > 0.45 || r.zb < -0.3);
+            if (bad || dy > 0.15 || Math.abs(du) > Math.max(0.7, it.w) || Math.abs(dn) > 0.8) return;
+            found.push({ r, score: Math.abs(du) + Math.abs(dn) * 0.3 + Math.abs((r.zb + r.h / 2) - (it.zb + it.h / 2)) * 0.5 });
         };
         [-0.3, 0, 0.3].forEach(fu => [0.3, 0.5, 0.8].forEach(fz => {
             const u = it.w * fu, p = [it.cx + U[0] * u, it.cy + U[1] * u, it.zb + Math.min(it.h * fz, it.h - 0.1)];
@@ -198,19 +204,23 @@ window.MLO = window.MLO || {};
             });
         }));
         // the faces may be gone already (a door cut out with the Door tool): that cut remembers the opening
-        if (!found.length) (imp().cutters || []).forEach(k => { if (k.face && k.type === 'door') accept({ cx: k.cx, cy: k.cy, zb: k.zb, w: k.w, h: k.h, yaw: k.yaw }); });
+        if (!found.length) (imp().cutters || []).forEach(k => { if (k.type === (win ? 'window' : 'door')) accept({ cx: k.cx, cy: k.cy, zb: k.zb, w: k.w, h: k.h, yaw: k.yaw, cut: k }); });
         if (!found.length) return null; found.sort((a, b) => a.score - b.score); return found[0].r;
     }
     // the door sized and put to the opening: its wall cut is the opening, the door is the opening less its room (and 2 cm at the head), moved along the wall so that it sits in it
     // with its room on the hinge side; the depth and the position across the wall stay as they are
     function openingFit(it, r) {
-        const { U } = axes(it), rm = doorRoom(it), along = (r.cx - it.cx) * U[0] + (r.cy - it.cy) * U[1];
-        return { cx: r3(it.cx + U[0] * along), cy: r3(it.cy + U[1] * along), zb: r.zb < 0.02 ? 0 : r3(r.zb), w: r3(Math.max(0.5, r.w - 2 * rm.gap)), h: r3(Math.max(1.5, r.h - 0.02)), cut: { w: r3(r.w), h: r3(r.h), du: 0, dz: 0 } };
+        const { U } = axes(it), rm = doorRoom(it), along = (r.cx - it.cx) * U[0] + (r.cy - it.cy) * U[1], c = acrossTo(it, r);
+        return { cx: r3(c[0] + U[0] * along), cy: r3(c[1] + U[1] * along), zb: r.zb < 0.02 ? 0 : r3(r.zb), w: r3(Math.max(0.5, r.w - 2 * rm.gap)), h: r3(Math.max(1.5, r.h - 0.02)), cut: { w: r3(r.w), h: r3(r.h), du: 0, dz: 0 } };
     }
     FM.findOpening = findOpening; FM.openingFit = openingFit;
     FM.matchOpening = function () {
-        const it = selFit(); if (!it || (it.kind !== 'door' && it.kind !== 'frame')) { toast('Select a placed door or frame first.', 'warn'); return false; }
+        const it = selFit(); if (!it) { toast('Select a placed window, door or frame first (F snaps it to the opening).', 'warn'); return false; }
         const r = findOpening(it);
+        if (it.kind === 'window') {
+            if (!r) { toast('No window faces or window cut of the building near this window: move it over the window and press F again.', 'warn'); return false; }
+            FM.set(frameFit(it, r)); toast('Window lined up with the building\'s window (' + r.w.toFixed(2) + ' x ' + r.h.toFixed(2) + ' m).', 'ok'); return true;
+        }
         if (!r) { toast('No door-shaped opening of the building is behind this ' + it.kind + ' (it may be deleted already): set the size by hand, or put it over the building\'s door faces and try again.', 'warn'); return false; }
         FM.set(it.kind === 'frame' ? frameFit(it, r) : openingFit(it, r));
         toast(it.kind === 'frame' ? 'The frame\'s outside now matches the building\'s door opening (' + r.w.toFixed(2) + ' x ' + r.h.toFixed(2) + ' m).' : 'The wall cut now matches the building\'s door opening (' + r.w.toFixed(2) + ' x ' + r.h.toFixed(2) + ' m) and the door was sized to sit in it.', 'ok'); return true;
@@ -392,7 +402,7 @@ window.MLO = window.MLO || {};
             framed = findFrame(nf); const fp = framed ? doorInFrame(nf, framed) : null, leaf0 = nf.w;                                      // put in a frame: it is sized to the frame's opening
             if (fp) Object.assign(nf, fp); else { framed = null; fitted = findOpening(nf); if (fitted) Object.assign(nf, openingFit(nf, fitted)); }          // put over the building's door faces: the wall cut is their size
             wide = (fp ? fp.w : (fitted ? fitted.w : 0)) > leaf0 * 1.7;                                                                          // wide enough for two leaves
-        } else if (nf.kind === 'frame') { fitted = findOpening(nf); if (fitted) Object.assign(nf, frameFit(nf, fitted)); }        // a frame over the building's door faces takes their size
+        } else if (nf.kind === 'frame' || nf.kind === 'window') { fitted = findOpening(nf); if (fitted) Object.assign(nf, frameFit(nf, fitted)); }        // a frame over the building's door faces takes their size
         Model.edit(P => { (P.import.fits = P.import.fits || []).push(nf); }); FM.sel = nf.id; M.UI.renderLeft();
         const inside = nf.kind === 'frame' ? fits().filter(d => d.kind === 'door' && findFrame(d, [nf])).length : 0;
         if (inside) { toast('Frame placed. ' + inside + ' door' + (inside === 1 ? ' stands' : 's stand') + ' in it: "Fit the doors in it" in the panel sizes ' + (inside === 1 ? 'it' : 'them') + ' to the frame\'s opening.', 'ok'); return; }
@@ -491,6 +501,7 @@ window.MLO = window.MLO || {};
     FM.key = function (k) {
         if (k === 'Escape') { if (drag) { FM.cancel(); return true; } if (FM.sel) { FM.sel = null; M.UI.renderLeft(); return true; } if (FM.chosen) { FM.chosen = null; M.UI.renderLeft(); return true; } return false; }
         if (k === 'x' || k === 'Delete' || k === 'Backspace') { FM.remove(); return true; }
+        if (k === 'f' && selFit()) { FM.matchOpening(); return true; }
         if (k === 'r') { if (!FM.turn(Math.PI / 2)) toast('Select a placed model first: R turns it 90 degrees.', 'warn'); return true; }
         return false;
     };
@@ -574,17 +585,18 @@ window.MLO = window.MLO || {};
                 const fi = frameInner(it);
                 root.append(el('div', { class: 'h' }, 'Frame'));
                 root.append(el('div', { class: 'note' }, (fi ? 'The opening inside it is ' + f2(fi.w) + ' x ' + f2(fi.h) + ' m. ' : '') + 'The frame sits in the wall cut and its hole is the cut in the room\'s wall. Put it over the building\'s door faces (or press the first button) to make its outside the size of that opening; doors that stand in it are sized to its opening with the second.'));
-                root.append(el('div', { class: 'row wrap' }, el('button', { class: 'btn sm primary', onclick: () => FM.matchOpening() }, 'Match the building\'s door opening'), el('button', { class: 'btn sm', onclick: () => FM.fitDoorsInFrame() }, 'Fit the doors in it')));
+                root.append(el('div', { class: 'row wrap' }, el('button', { class: 'btn sm primary', onclick: () => FM.matchOpening() }, 'Match the building\'s door opening (F)'), el('button', { class: 'btn sm', onclick: () => FM.fitDoorsInFrame() }, 'Fit the doors in it')));
             }
             if (door && !inFrame) {
                 const dc = FM.doorCut(it);
                 root.append(el('div', { class: 'h' }, 'Wall cut'));
                 root.append(num('Cut width', () => f2(dc.w, 3), v => FM.set({ cut: { w: r3(Math.max(0.3, v)), h: dc.h, du: 0, dz: it.cut ? it.cut.dz : 0 } }), '0.01', 'm'),
                     num('Cut height', () => f2(dc.h, 3), v => FM.set({ cut: { w: dc.w, h: r3(Math.max(0.5, v)), du: 0, dz: it.cut ? it.cut.dz : 0 } }), '0.01', 'm'));
-                root.append(el('div', { class: 'row wrap' }, el('button', { class: 'btn sm primary', title: 'Look behind the door for the door-shaped faces of the building and copy their size', onclick: () => FM.matchOpening() }, 'Match the building\'s door opening'),
+                root.append(el('div', { class: 'row wrap' }, el('button', { class: 'btn sm primary', title: 'Look behind the door for the door-shaped faces of the building and copy their size', onclick: () => FM.matchOpening() }, 'Match the building\'s door opening (F)'),
                     it.cut ? el('button', { class: 'btn sm', onclick: () => FM.set({ cut: null }) }, 'Back to the door size') : null));
                 root.append(el('div', { class: 'note' }, it.cut ? 'The wall cut is the size of the building\'s own door opening (the faces you delete there), so the room\'s wall and the building\'s hole line up; the door is sized to sit in it with room to swing.' : 'The wall cut is centred on the door: the door plus the same gap on each side, enough for the leaf to turn about its hinge. Put the door over the building\'s door faces (or press the button) to cut the room\'s wall to the same size as the building\'s opening, with the door in the middle of it.'));
             }
+            if (it.kind === 'window') root.append(el('div', { class: 'row wrap' }, el('button', { class: 'btn sm primary', title: 'Line it up with the building\'s window faces (or its window cut): position, size and turn. Key F', onclick: () => FM.matchOpening() }, 'Line up with the building\'s window (F)')));
             root.append(chk('Opens the interior\'s own wall here (and makes the portal / glass collision)', () => it.open !== false, v => FM.set({ open: v })));
             root.append(el('div', { class: 'h' }, 'The wall behind it'));
             root.append(el('div', { class: 'note' }, 'Nothing is cut from the building by itself. Select the faces behind the model, delete them in the Delete faces tool, and clear the building\'s collision there if the model has to be passable.'));

@@ -1129,6 +1129,23 @@ window.MLO = window.MLO || {};
         return (IM.lines = { xs: pick(xs), ys: pick(ys) });
     };
 
+    // ---------- corners of the model's walls (an x-facing and a y-facing wall meet there), so room corners snap to them ----------
+    IM.wallCorners = function () {
+        if (IM.lines && IM.lines.corners) return IM.lines.corners;
+        const fx = new Set(), fy = new Set(), key = (x, y) => Math.round(x * 100) + ',' + Math.round(y * 100);
+        for (const tb of IM.tgt || []) {
+            const p = tb.pos, ix = tb.idx;
+            for (let t = 0; t + 2 < ix.length; t += 3) {
+                const v = [ix[t] * 3, ix[t + 1] * 3, ix[t + 2] * 3], e1 = [p[v[1]] - p[v[0]], p[v[1] + 1] - p[v[0] + 1]], e2 = [p[v[2]] - p[v[0]], p[v[2] + 1] - p[v[0] + 1]];
+                const ez1 = p[v[1] + 2] - p[v[0] + 2], ez2 = p[v[2] + 2] - p[v[0] + 2], nx = e1[1] * ez2 - ez1 * e2[1], ny = ez1 * e2[0] - e1[0] * ez2, l = Math.hypot(nx, ny, e1[0] * e2[1] - e1[1] * e2[0]); if (l < 1e-6) continue;
+                const s = Math.abs(nx / l) > 0.995 ? fx : (Math.abs(ny / l) > 0.995 ? fy : null); if (!s) continue;
+                v.forEach(i => { if (Math.abs(p[i]) < 60 && Math.abs(p[i + 1]) < 60) s.add(key(p[i], p[i + 1])); });
+            }
+        }
+        const out = []; fx.forEach(k => { if (fy.has(k)) { const c = k.split(','); out.push([c[0] / 100, c[1] / 100]); } });
+        IM.snapLines(); return (IM.lines.corners = out);
+    };
+
     // ---------- bounds of the target in the shell frame (for framing the camera) ----------
     IM.bounds = function (building) {
         const m = IM.targetModel(); if (!m) return null;
