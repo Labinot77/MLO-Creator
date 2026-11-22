@@ -8,9 +8,10 @@ window.MLO = window.MLO || {};
     const kit = () => M.UI.kit;
     const toast = (t, k) => bus.emit('toast', { text: t, kind: k });
 
-    const TOOLS = [['room', 'Add room', '1'], ['cut', 'Cut out', '2'], ['part', 'Partition', '3'], ['door', 'Door', '4'], ['window', 'Window', '5'], ['arch', 'Archway', '6'], ['floor', 'Floor paint', '7'], ['select', 'Select', 'V'], ['eraser', 'Eraser', 'X']];
+    const TOOLS = [['room', 'Add room', '1'], ['poly', 'Angled room', '8'], ['cut', 'Cut out', '2'], ['part', 'Partition', '3'], ['door', 'Door', '4'], ['window', 'Window', '5'], ['arch', 'Archway', '6'], ['floor', 'Floor paint', '7'], ['select', 'Select', 'V'], ['eraser', 'Eraser', 'X']];
     const HELP = {
         room: 'Drag a rectangle to add it to the interior. Corners snap to the house\'s walls and to 5 cm.',
+        poly: 'Click the corners of a room with walls at any angle; click the first corner (or Enter) to close it. Backspace undoes a corner.',
         cut: 'Drag a rectangle to take it out of the interior (a column, a closet, a bay you do not want).',
         part: 'Drag a straight line to build an interior wall. It snaps to the other walls. Put doors in it with the Door tool.',
         door: 'Click a wall to cut a doorway (0.9 x 2.1 m). Works on interior walls and on the house walls. Click it again to fill it in.',
@@ -131,6 +132,26 @@ window.MLO = window.MLO || {};
                 root.append(el('div', { class: 'note' }, (pt.o === 'H' ? 'Runs along x at y = ' : 'Runs along y at x = ') + f1(pt.c) + ' m'));
                 root.append(numField('Position', () => f1(pt.c), v => upd('c', v), '0.01', 'm'), numField('Start', () => f1(pt.u0), v => upd('u0', v), '0.01', 'm'), numField('End', () => f1(pt.u1), v => upd('u1', v), '0.01', 'm'));
                 root.append(el('div', { class: 'row' }, el('button', { class: 'btn sm danger', onclick: () => M.ShellTools.deleteSelected() }, 'Delete partition')));
+            }
+        } else if (sel && sel.kind === 'apart') {
+            const pt = (sh.aparts || []).find(p => p.id === sel.id);
+            if (pt) {
+                const L = Math.hypot(pt.b[0] - pt.a[0], pt.b[1] - pt.a[1]), deg = Math.atan2(pt.b[1] - pt.a[1], pt.b[0] - pt.a[0]) * 180 / Math.PI;
+                root.append(el('div', { class: 'h' }, 'Selected angled partition'));
+                root.append(el('div', { class: 'note' }, f1(L) + ' m long at ' + deg.toFixed(1) + '°, from ' + f1(pt.a[0]) + ', ' + f1(pt.a[1]) + ' to ' + f1(pt.b[0]) + ', ' + f1(pt.b[1]) + '. Doors in it come from the opening tools.'));
+                root.append(el('div', { class: 'row' }, el('button', { class: 'btn sm danger', onclick: () => M.ShellTools.deleteSelected() }, 'Delete partition')));
+            }
+        } else if (sel && sel.kind === 'poly') {
+            const pg = (sh.polys || []).find(p => p.id === sel.id);
+            if (pg) {
+                const pts = pg.pts, edges = pts.map((a, i) => { const b = pts[(i + 1) % pts.length]; return [i, 'Square to wall ' + (i + 1) + ' (' + f1(Math.hypot(b[0] - a[0], b[1] - a[1])) + ' m, ' + ((((Math.atan2(b[1] - a[1], b[0] - a[0]) * 180 / Math.PI) % 180) + 180) % 180).toFixed(0) + '°)']; });
+                root.append(el('div', { class: 'h' }, 'Selected angled room'));
+                root.append(el('div', { class: 'note' }, pts.length + ' corners. Drag a white corner to move it (snaps like drawing, Shift: free), drag the inside to move the room. Del or X deletes it.'));
+                const upd = (key, v) => Model.edit(Q => { const q = (Q.shell.polys || []).find(x => x.id === pg.id); if (q) q[key] = v; });
+                root.append(el('div', { class: 'row' }, el('label', null, 'Floor'), k.swatchEl(pg.tex || S.project.defaults.floor, 22), el('button', { class: 'btn sm', title: 'Give it the floor texture chosen in the Paint tab', onclick: () => upd('tex', S.brush.floor) }, 'Use paint floor'), el('label', null, 'Walls'), k.swatchEl(pg.wtex || S.project.defaults.wallInt, 22), el('button', { class: 'btn sm', title: 'Give its walls the wall texture chosen in the Paint tab', onclick: () => upd('wtex', S.brush.wall) }, 'Use paint wall')));
+                const longest = edges.reduce((b, e, i) => { const a = pts[i], c = pts[(i + 1) % pts.length], l = Math.hypot(c[0] - a[0], c[1] - a[1]); return l > b[1] ? [i, l] : b; }, [0, 0])[0];
+                if (M.ImportUI && M.ImportUI.divideRow) M.ImportUI.divideRow(root, k, (n, way) => M.ShellTools.dividePoly(pg.id, n, +way), [[longest, edges[longest][1] + ' (longest)']].concat(edges.filter(e => e[0] !== longest)));
+                root.append(el('div', { class: 'row' }, el('button', { class: 'btn sm danger', onclick: () => M.ShellTools.deleteSelected() }, 'Delete angled room')));
             }
         }
     };

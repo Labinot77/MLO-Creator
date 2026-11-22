@@ -1,9 +1,14 @@
-// Baked ambient light for the exported interior (vertex colour 0). C# 5.
-// GTA lights map and interior models with the ambient light stored per vertex: red = natural (sky, windows),
-// green = artificial (the interior's own ambient). Full white everywhere makes every surface evenly bright.
-// Here the interior is split finer, ambient occlusion is traced against the interior itself (corners and the
-// meeting of walls, floor and ceiling get darker) and written into those channels. Doors get one even, lower value.
-// Settings: "ambient" in settings.json, e.g. { "enabled": true, "strength": 0.7, "natural": 0.55, "artificial": 0.85, "door": 0.55 }.
+// Baked ambient light for the exported interior (vertex colour 0), the way the game's own interiors are lit. C# 5.
+// GTA lights map and interior models with the ambient light stored per vertex: red = natural (sky light coming in through
+// the windows and doors), green = artificial (the interior's own ambient). Full white everywhere makes every surface evenly
+// bright and lets the sky light reach the back of every room, so a shell glows at night.
+// Here the interior is split finer and ambient occlusion is traced against the interior itself (corners and the meeting
+// of walls, floor and ceiling get darker). The natural light comes in through the portals (windows and doors): bright by
+// them, falling off into the room, down to `naturalMin` deep inside, like a native MLO. Door props are baked the same way
+// where they stand (their outside face gets the sky light). The ceiling lights are made interior-only and the first few
+// cast shadows, like the game's own interior lights.
+// Settings: "ambient" in settings.json, e.g. { "enabled": true, "strength": 0.7, "natural": 0.55, "naturalMin": 0.12, "artificial": 0.85,
+// "door": 0.55, "portalReach": 1.0, "shadowLights": 8, "interiorOnly": true }.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -16,8 +21,9 @@ namespace MloCreator
         class AmbientSettings
         {
             public bool Enabled = true;
-            public double Grid = 0.25, Distance = 1.5, Strength = 0.7, Natural = 0.55, Artificial = 0.85, Min = 0.3, Door = 0.55;
-            public int Rays = 32;
+            public double Grid = 0.25, Distance = 1.5, Strength = 0.7, Natural = 0.55, NaturalMin = 0.12, Artificial = 0.85, Min = 0.3, Door = 0.55, PortalReach = 1.0;
+            public int Rays = 32, ShadowLights = 8;
+            public bool InteriorOnly = true;
         }
 
         static AmbientSettings LoadAmbientSettings()
@@ -38,6 +44,10 @@ namespace MloCreator
                 a.Min = Clamp(J.D(J.G(d, "min"), a.Min), 0, 1);
                 a.Door = Clamp(J.D(J.G(d, "door"), a.Door), 0, 1);
                 a.Rays = (int)Clamp(J.I(J.G(d, "rays"), a.Rays), 8, 128);
+                a.NaturalMin = Clamp(J.D(J.G(d, "naturalMin"), a.NaturalMin), 0, 1);
+                a.PortalReach = Clamp(J.D(J.G(d, "portalReach"), a.PortalReach), 0, 4);
+                a.ShadowLights = (int)Clamp(J.I(J.G(d, "shadowLights"), a.ShadowLights), 0, 48);
+                a.InteriorOnly = J.B(J.G(d, "interiorOnly"), a.InteriorOnly);
             }
             catch { }
             return a;
@@ -45,14 +55,76 @@ namespace MloCreator
 
         static double Clamp(double v, double lo, double hi) { return v < lo ? lo : v > hi ? hi : v; }
 
-        // Interior parts get traced shading, doors one even value. Called right before the drawables are written.
+        // A window or door the sky light comes in through: its middle, the way it looks out (unit), its area.
+        class SkyHole { public V3 C, N; public double A; }
+
+        static List<SkyHole> SkyHoles(List<PortalData> portals)
+        {
+            List<SkyHole> list = new List<SkyHole>();
+            if (portals == null) return list;
+            foreach (PortalData p in portals)
+            {
+                V3 a = new V3(p.C[0], p.C[1], p.C[2]), b = new V3(p.C[3], p.C[4], p.C[5]), c = new V3(p.C[6], p.C[7], p.C[8]), d = new V3(p.C[9], p.C[10], p.C[11]);
+                V3 n = Cross(b - a, c - a) + Cross(c - a, d - a); double l = n.Len(); if (l < 1e-6) continue;
+                SkyHole h = new SkyHole(); h.C = (a + b + c + d) * 0.25; h.N = n * (1 / l); h.A = l / 2; list.Add(h);
+            }
+            return list;
+        }
+
+        // the old call (an Exporter.cs patched by install-ambient.ps1): no portals, doors one even value
         static void BakeAmbient(List<GroupData> groups, List<GroupData> doors, List<string> log)
         {
             AmbientSettings s = LoadAmbientSettings();
-            if (!s.Enabled) { log.Add("ambient: off (settings.json)"); return; }
+            BakeInterior(groups, null, s, log);
+            if (!s.Enabled) return;
+            byte door = (byte)Math.Round(255 * s.Door);
+            foreach (GroupData g in doors)
+                foreach (MatData m in g.Mats)
+                {
+                    if (m.Glass) continue;
+                    m.Col = new byte[m.Pos.Length / 3 * 4];
+                    for (int i = 0; i < m.Col.Length; i += 4) { m.Col[i] = door; m.Col[i + 1] = door; m.Col[i + 2] = 255; m.Col[i + 3] = 255; }
+                }
+        }
 
+        // Interior parts and door props get traced shading with the sky light from the portals; the lights get the game's interior flags.
+        // doorAt: where each door prop stands in the interior (its geometry is relative to that point).
+        static void BakeAmbient(List<GroupData> groups, List<GroupData> doors, List<V3> doorAt, List<PortalData> portals, List<string> log)
+        {
+            AmbientSettings s = LoadAmbientSettings();
+            List<float[]> tris = BakeInterior(groups, portals, s, log);
+            LightFlags(groups, s, log);
+            if (!s.Enabled) return;
+            List<SkyHole> holes = SkyHoles(portals);
+            V3[] dirs = HemisphereDirs(s.Rays);
+            for (int i = 0; i < doors.Count; i++)
+                foreach (MatData m in doors[i].Mats)
+                {
+                    if (m.Glass) continue;
+                    m.Col = Occlusion(m, tris, dirs, s, holes, i < doorAt.Count ? doorAt[i] : new V3(0, 0, 0), true);
+                }
+            if (doors.Count > 0) log.Add("ambient: " + doors.Count + " door prop(s) baked where they stand");
+        }
+
+        // the lights: interior-only (no light through the walls to the outside) and the first few cast shadows, as in the game's interiors
+        static void LightFlags(List<GroupData> groups, AmbientSettings s, List<string> log)
+        {
+            int n = 0, shadows = 0;
+            foreach (GroupData g in groups)
+                foreach (LightData l in g.Lights)
+                {
+                    int f = s.InteriorOnly ? 1 : 0;
+                    if (n < s.ShadowLights) { f |= 64 | 128 | 256; shadows++; }          // CAST_SHADOWS, CAST_STATIC_GEOM_SHADOWS, CAST_DYNAMIC_GEOM_SHADOWS
+                    l.Flags = f; n++;
+                }
+            if (n > 0) log.Add("lights: " + n + (s.InteriorOnly ? " interior-only" : "") + ", " + shadows + " cast shadows");
+        }
+
+        static List<float[]> BakeInterior(List<GroupData> groups, List<PortalData> portals, AmbientSettings s, List<string> log)
+        {
             // occluders: every solid triangle of the interior, before splitting (fewer triangles to trace against)
             List<float[]> tris = new List<float[]>();
+            if (!s.Enabled) { log.Add("ambient: off (settings.json)"); return tris; }
             foreach (GroupData g in groups)
                 foreach (MatData m in g.Mats)
                     if (!m.Glass)
@@ -67,6 +139,7 @@ namespace MloCreator
                             tris.Add(t);
                         }
 
+            List<SkyHole> holes = SkyHoles(portals);
             V3[] dirs = HemisphereDirs(s.Rays);
             int verts = 0;
             foreach (GroupData g in groups)
@@ -74,21 +147,33 @@ namespace MloCreator
                 {
                     if (m.Glass) continue;
                     Subdivide(m, s.Grid);
-                    m.Col = Occlusion(m, tris, dirs, s);
+                    m.Col = Occlusion(m, tris, dirs, s, holes, new V3(0, 0, 0), false);
                     verts += m.Pos.Length / 3;
                 }
-
-            byte door = (byte)Math.Round(255 * s.Door);
-            foreach (GroupData g in doors)
-                foreach (MatData m in g.Mats)
-                {
-                    if (m.Glass) continue;
-                    m.Col = new byte[m.Pos.Length / 3 * 4];
-                    for (int i = 0; i < m.Col.Length; i += 4) { m.Col[i] = door; m.Col[i + 1] = door; m.Col[i + 2] = 255; m.Col[i + 3] = 255; }
-                }
-            log.Add("ambient: baked shading on " + verts + " vertices (natural " + s.Natural + ", artificial " + s.Artificial + "), doors " + s.Door);
+            log.Add("ambient: baked shading on " + verts + " vertices (natural " + s.NaturalMin + " deep inside to " + s.Natural + " at " + holes.Count + " window(s) / door(s), artificial " + s.Artificial + ")");
+            return tris;
         }
 
+        // How much sky light reaches a point inside through the portals: 0 (none) .. 1 (standing in one). Each portal is a lit area light:
+        // its view factor from the point (area x the two cosines / pi r^2), so it falls off with the distance and the angle. Points outside a portal
+        // (the outer face of a door, a window frame on the outside) get the full sky light.
+        static double SkyAt(V3 p, V3 n, List<SkyHole> holes, double reach)
+        {
+            double sum = 0;
+            foreach (SkyHole h in holes)
+            {
+                V3 d = h.C - p; double r = d.Len();
+                double side = Dot(p - h.C, h.N);
+                if (side > -0.02 && r < 1.6) { if (Dot(n, h.N) > 0.2) return 1; continue; }        // on the outside of it, facing out
+                if (r < 1e-3) return 1;
+                V3 w = d * (1 / r);
+                double cv = Dot(n, w), cp = -side / r;                                           // the point looks at the portal; the portal's inside looks at the point
+                if (cv <= 0 || cp <= 0) continue;
+                double rr = r * r + h.A * 0.25;                                                  // (no blow-up right at the portal)
+                sum += h.A * cv * cp / (Math.PI * rr);
+            }
+            return Math.Min(1, sum * (1 + reach * 2));
+        }
         // Splits every triangle whose longest edge is longer than grid (shared edges split once, uv / normal interpolated).
         static void Subdivide(MatData m, double grid)
         {
@@ -153,7 +238,7 @@ namespace MloCreator
             return d;
         }
 
-        static byte[] Occlusion(MatData m, List<float[]> tris, V3[] dirs, AmbientSettings s)
+        static byte[] Occlusion(MatData m, List<float[]> tris, V3[] dirs, AmbientSettings s, List<SkyHole> holes, V3 off, bool door)
         {
             int nv = m.Pos.Length / 3;
             byte[] col = new byte[nv * 4];
@@ -161,7 +246,7 @@ namespace MloCreator
             double reach = s.Distance;
             for (int v = 0; v < nv; v++)
             {
-                V3 p = new V3(m.Pos[v * 3], m.Pos[v * 3 + 1], m.Pos[v * 3 + 2]);
+                V3 p = new V3(m.Pos[v * 3] + off.X, m.Pos[v * 3 + 1] + off.Y, m.Pos[v * 3 + 2] + off.Z);
                 V3 n = new V3(m.Nrm[v * 3], m.Nrm[v * 3 + 1], m.Nrm[v * 3 + 2]);
                 double nl = n.Len(); n = nl > 1e-6 ? n * (1 / nl) : new V3(0, 0, 1);
 
@@ -197,7 +282,9 @@ namespace MloCreator
                     if (hit < reach) occ += 1 - hit / reach;
                 }
                 double light = Math.Max(s.Min, 1 - s.Strength * occ / dirs.Length);
-                col[v * 4] = (byte)Math.Round(255 * s.Natural * light);
+                double sky = holes != null && holes.Count > 0 ? SkyAt(p, n, holes, s.PortalReach) : (door ? s.Door / Math.Max(1e-3, s.Natural) : 1);
+                double nat = holes != null && holes.Count > 0 ? s.NaturalMin + (s.Natural - s.NaturalMin) * sky : s.Natural * Math.Min(1, sky);
+                col[v * 4] = (byte)Math.Round(255 * Clamp(nat * light, 0, 1));
                 col[v * 4 + 1] = (byte)Math.Round(255 * s.Artificial * light);
                 col[v * 4 + 2] = 255;
                 col[v * 4 + 3] = 255;

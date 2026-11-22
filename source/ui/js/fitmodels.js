@@ -253,6 +253,25 @@ window.MLO = window.MLO || {};
         FM.set(it.kind === 'frame' ? frameFit(it, r) : openingFit(it, r));
         toast(it.kind === 'frame' ? 'The frame\'s outside now matches the building\'s door opening (' + r.w.toFixed(2) + ' x ' + r.h.toFixed(2) + ' m).' : 'The wall cut now matches the building\'s door opening (' + r.w.toFixed(2) + ' x ' + r.h.toFixed(2) + ' m) and the door was sized to sit in it.', 'ok'); return true;
     };
+    // Flush with the interior wall: the window is turned square to the room's wall face next to it (within 15 degrees and 1 m) and moved across the wall so
+    // that its room side lies in that face. all: every placed window. Returns how many were moved.
+    function flushPatch(it) {
+        const U = [Math.cos(it.yaw), Math.sin(it.yaw)], w = M.ShellTools.wallFaceNear(it.cx, it.cy, U, 1.0); if (!w) return null;
+        const t = (w.t[0] * U[0] + w.t[1] * U[1]) >= 0 ? w.t : [-w.t[0], -w.t[1]], yaw = Math.atan2(t[1], t[0]);
+        const s = (it.cx - w.p[0]) * w.n[0] + (it.cy - w.p[1]) * w.n[1], dn = -it.d / 2 - s;          // its middle half its depth behind the face: the room side is the face
+        const along = (it.cx - w.p[0]) * w.t[0] + (it.cy - w.p[1]) * w.t[1], cx = w.p[0] + w.t[0] * along + w.n[0] * (s + dn), cy = w.p[1] + w.t[1] * along + w.n[1] * (s + dn);
+        return { cx: r3(cx), cy: r3(cy), yaw: r3(Math.abs(Math.sin(yaw)) < 1e-6 || Math.abs(Math.cos(yaw)) < 1e-6 ? Math.round(yaw / (Math.PI / 2)) * (Math.PI / 2) : yaw) };
+    }
+    FM.flushInterior = function (all) {
+        const list = all ? fits().filter(f => f.kind === 'window') : [selFit()].filter(f => f && f.kind === 'window');
+        if (!list.length) { toast(all ? 'No window models placed.' : 'Select a placed window first.', 'warn'); return 0; }
+        const patches = list.map(f => [f.id, flushPatch(f)]).filter(p => p[1]);
+        if (!patches.length) { toast('No interior wall within 1 m running along ' + (all ? 'the windows' : 'this window') + '. Draw the room first, or move the window onto its wall.', 'warn'); return 0; }
+        Model.edit(P => { patches.forEach(p => { const q = (P.import.fits || []).find(f => f.id === p[0]); if (q) Object.assign(q, p[1]); }); }); M.UI.renderLeft();
+        toast(patches.length + ' window' + (patches.length === 1 ? '' : 's') + ' flush with the interior wall' + (patches.length < list.length ? ' (' + (list.length - patches.length) + ' had no wall near them)' : '') + '.', 'ok');
+        return patches.length;
+    };
+
     // every door that stands in the selected frame, sized to its opening
     FM.fitDoorsInFrame = function () {
         const fr = selFit(); if (!fr || fr.kind !== 'frame') { toast('Select a placed frame first.', 'warn'); return false; }
@@ -535,6 +554,7 @@ window.MLO = window.MLO || {};
     };
     FM.keyEv = function (e, k) {
         if (e.shiftKey && !e.ctrlKey && !e.altKey && k === 'd') { FM.duplicate(); return true; }
+        if (e.shiftKey && !e.ctrlKey && !e.altKey && k === 'f') { FM.flushInterior(false); return true; }
         if (e.shiftKey && !e.ctrlKey && !e.altKey && k === 'r') { if (!FM.turn(Math.PI)) toast('Select a placed model first: Shift+R turns it around.', 'warn'); return true; }
         return false;
     };
@@ -624,7 +644,8 @@ window.MLO = window.MLO || {};
                     it.cut ? el('button', { class: 'btn sm', onclick: () => FM.set({ cut: null }) }, 'Back to the door size') : null));
                 root.append(el('div', { class: 'note' }, it.cut ? 'The wall cut is the size of the building\'s own door opening (the faces you delete there), so the room\'s wall and the building\'s hole line up; the door is sized to sit in it with room to swing.' : 'The wall cut is centred on the door: the door plus the same gap on each side, enough for the leaf to turn about its hinge. Put the door over the building\'s door faces (or press the button) to cut the room\'s wall to the same size as the building\'s opening, with the door in the middle of it.'));
             }
-            if (it.kind === 'window') root.append(el('div', { class: 'row wrap' }, el('button', { class: 'btn sm primary', title: 'Line it up with the building\'s window faces (or its window cut): position, size and turn. Key F', onclick: () => FM.matchOpening() }, 'Line up with the building\'s window (F)')));
+            if (it.kind === 'window') root.append(el('div', { class: 'row wrap' }, el('button', { class: 'btn sm primary', title: 'Line it up with the building\'s window faces (or its window cut): position, size and turn. Key F', onclick: () => FM.matchOpening() }, 'Line up with the building\'s window (F)')),
+                el('div', { class: 'row wrap' }, el('button', { class: 'btn sm primary', title: 'Turn it square to the interior wall next to it and move it so its room side is flat with the wall. Shift+F', onclick: () => FM.flushInterior(false) }, 'Flush with the interior wall (Shift+F)'), el('button', { class: 'btn sm', title: 'Every placed window: flat with the interior wall next to it', onclick: () => FM.flushInterior(true) }, 'All windows')));
             root.append(chk('Opens the interior\'s own wall here (and makes the portal / glass collision)', () => it.open !== false, v => FM.set({ open: v })));
             root.append(el('div', { class: 'h' }, 'The wall behind it'));
             root.append(el('div', { class: 'note' }, 'Nothing is cut from the building by itself. Select the faces behind the model, delete them in the Delete faces tool, and clear the building\'s collision there if the model has to be passable.'));

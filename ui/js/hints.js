@@ -15,7 +15,8 @@ window.MLO = window.MLO || {};
         room: ['Add room', [['Drag', 'Draw a rectangle, it snaps to the model\'s walls']]],
         cut: ['Cut out', [['Drag', 'Draw the part to take out of the interior']]],
         fill: ['Fill gaps', [['Click a green area', 'Fill the gap'], ['Shift+click', 'Fill a closed hole of any size']]],
-        part: ['Partition', [['Drag', 'Draw a straight interior wall']]],
+        part: ['Partition', [['Drag', 'Draw a wall; snaps to even spacing and any wall angle'], ['Shift', 'No snapping']]],
+        poly: ['Angled room', [['Click', 'Add a corner'], ['Click the first corner / Enter', 'Close the room'], ['Backspace', 'Remove the last corner'], ['Shift', 'No snapping']]],
         door: ['Door', [['Click the faces of a door', 'Cut out and fill with the door model'], ['Shift+click', 'One triangle only'], ['Click an opening', 'Select it']]],
         window: ['Window', [['Click the faces of a window', 'Cut out and fill with glass'], ['Shift+click', 'One triangle only'], ['Click an opening', 'Select it']]],
         arch: ['Archway', [['Click a wall', 'Cut an archway'], ['Drag the box', 'Move it']]],
@@ -50,7 +51,8 @@ window.MLO = window.MLO || {};
     const VANILLA = {
         room: ['Add room', [['Drag', 'Add a rectangle to the interior']]],
         cut: ['Cut out', [['Drag', 'Take a rectangle out of the interior']]],
-        part: ['Partition', [['Drag', 'Draw a straight interior wall']]],
+        part: ['Partition', [['Drag', 'Draw a wall; snaps to even spacing and any wall angle'], ['Shift', 'No snapping']]],
+        poly: ['Angled room', [['Click', 'Add a corner'], ['Click the first corner / Enter', 'Close the room'], ['Backspace', 'Remove the last corner'], ['Shift', 'No snapping']]],
         door: ['Door', [['Click a wall', 'Put a door in it']]],
         window: ['Window', [['Click a wall', 'Put a window in it']]],
         arch: ['Archway', [['Click a wall', 'Make an opening']]],
@@ -70,7 +72,7 @@ window.MLO = window.MLO || {};
         // a drag in progress: only what matters now
         if (st.level) return ['Moving the rooms', [['Ctrl', '5 cm steps'], ['Shift', 'Fine'], CANCEL]];
         if (st.room) return [st.room === 'move' ? 'Moving a room' : 'Resizing a room', [['Shift', 'No snapping'], CANCEL]];
-        if (st.shell) return [({ room: 'Adding a room', cut: 'Cutting out', floor: 'Painting the floor', part: 'Drawing a wall' })[st.shell] || 'Dragging', [['Release', 'Apply'], CANCEL]];
+        if (st.shell) return [({ room: 'Adding a room', cut: 'Cutting out', floor: 'Painting the floor', part: 'Drawing a wall', poly: 'Moving a corner' })[st.shell] || 'Dragging', [['Release', 'Apply'], CANCEL]];
         if (st.cutter) return ['Moving the box', [['Release', 'Apply'], CANCEL]];
         if (st.figure) return ['Moving the figure', [['Release', 'Put it down'], CANCEL]];
         if (st.fit) return [({ move: 'Moving the model', arrow: 'Moving along an axis', face: 'Changing the size', uni: 'Scaling it all together', ring: 'Turning the model' })[st.fit] || 'Dragging the model', [['Shift', 'Fine / no snapping'], st.fit === 'face' ? ['Alt', 'From the middle'] : ['Release', 'Apply'], CANCEL]];

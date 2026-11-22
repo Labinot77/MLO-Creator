@@ -13,12 +13,12 @@ window.MLO = window.MLO || {};
     const encName = () => encodeURIComponent(Model.safeName(S.project.name));
     const kb = (n) => n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
 
-    const TOOLS = [['building', 'Select building', 'B'], ['frame', 'Frame', 'O'], ['level', 'Raise / lower rooms', 'G'], ['room', 'Add room', '1'], ['cut', 'Cut out', '2'], ['fill', 'Fill gaps', 'J'], ['part', 'Partition', '3'], ['door', 'Door', '4'], ['window', 'Window', '5'], ['arch', 'Archway', '6'], ['fit', 'Window / door models', 'I'], ['plants', 'Props and plants', 'Y'],
+    const TOOLS = [['building', 'Select building', 'B'], ['frame', 'Frame', 'O'], ['level', 'Raise / lower rooms', 'G'], ['room', 'Add room', '1'], ['poly', 'Angled room', '8'], ['cut', 'Cut out', '2'], ['fill', 'Fill gaps', 'J'], ['part', 'Partition', '3'], ['door', 'Door', '4'], ['window', 'Window', '5'], ['arch', 'Archway', '6'], ['fit', 'Window / door models', 'I'], ['plants', 'Props and plants', 'Y'],
         ['floor', 'Floor paint', '7'], ['light', 'Light', 'L'], ['figure', 'Scale figure', 'H'], ['faces', 'Delete faces', 'F'], ['edges', 'Edges (fill holes)', 'K'], ['parts', 'Model parts', 'P'], ['collision', 'Collision', 'M'], ['cbox', 'Collision box', 'N'], ['walk', 'Walk check', 'U'], ['select', 'Select', 'V'], ['eraser', 'Eraser', 'X']];
     // What each tool does in one line (the tool list shows it; the long text is in HELP).
     const SUM = {
         building: 'Pick one building out of the block.', frame: 'Square the grid to a wall and set the floor.', level: 'Raise or lower the rooms against the model.',
-        room: 'Draw a rectangle: floor, walls and ceiling.', cut: 'Take a rectangle out of a room (a column, a closet).', part: 'Draw a straight interior wall.', fill: 'Close narrow gaps between your rooms.',
+        room: 'Draw a rectangle: floor, walls and ceiling.', poly: 'Click the corners of a room with walls at any angle (diagonal garage doors, bay walls).', cut: 'Take a rectangle out of a room (a column, a closet).', part: 'Draw a straight interior wall at any angle; it snaps to even spacing.', fill: 'Close narrow gaps between your rooms.',
         door: 'Cut a door out of the model and put the door in.', window: 'Cut a window out of the model and put glass in.', arch: 'Cut a wide opening with a box.', fit: 'Place window and door models (.glb) by hand with a move / size / turn gizmo.', plants: 'Click props, plants and small model pieces in the view and remove them.',
         faces: 'Select faces like in Blender (click, box, A, L), then delete them: fake doors, painted windows, grilles.', parts: 'See each texture of the model and remove or restore a whole one.', collision: 'Pick pieces of the building\'s invisible collision and delete them.', cbox: 'Build your own collision: boxes with a surface type.', walk: 'Walk a player through the interior and list what blocks or leaks.', edges: 'Select the rim of a hole in the wall and fill it with faces.',
         floor: 'Paint a floor texture on part of the floor.', light: 'Hang a ceiling light.',
@@ -30,7 +30,7 @@ window.MLO = window.MLO || {};
         building: { name: 'Select building', vars: [['building', 'Select building', 'B']] },
         frame: { name: 'Grid and floor', sum: 'Square the grid to a wall and set the floor.', vars: [['frame', 'Grid and floor', 'O']] },
         level: { name: 'Raise / lower rooms', vars: [['level', 'Raise / lower rooms', 'G']] },
-        room: { name: 'Rooms', sum: 'Draw a rectangle for a room, or cut one out of a room (a column, a closet).', vars: [['room', 'Add room', '1'], ['cut', 'Cut out', '2']] },
+        room: { name: 'Rooms', sum: 'Draw a rectangle for a room, a room with angled walls, or cut one out of a room (a column, a closet).', vars: [['room', 'Add room', '1'], ['poly', 'Angled room', '8'], ['cut', 'Cut out', '2']] },
         part: { name: 'Partition', vars: [['part', 'Partition', '3']] },
         fill: { name: 'Fill gaps', vars: [['fill', 'Fill gaps', 'J']] },
         opening: { name: 'Cut an opening', sum: 'Cut a door, window or archway out of the building\'s wall and fill it.', vars: [['door', 'Door', '4'], ['window', 'Window', '5'], ['arch', 'Archway', '6']] },
@@ -49,7 +49,7 @@ window.MLO = window.MLO || {};
     const STAGES = [
         { id: 'import', name: 'Import the model', note: 'Add the building\'s model files and say where it stands in the game. Done in the Import tab.', tab: 'import', rows: [], steps: ['model', 'place'] },
         { id: 'set', name: 'Set up the building', note: 'Pick the building out of the block and put the grid on its floor. Everything else is measured from the grid.', rows: ['building', 'frame', 'level'], steps: ['building', 'grid'] },
-        { id: 'rooms', name: 'Draw the rooms', note: 'The interior is rectangles: floor, walls and ceiling. Their edges have to lie on the building\'s own walls.', rows: ['room', 'part', 'fill'], steps: ['rooms', 'fit'] },
+        { id: 'rooms', name: 'Draw the rooms', note: 'The interior is rectangles and angled rooms: floor, walls and ceiling. Their edges have to lie on the building\'s own walls (diagonal ones too).', rows: ['room', 'part', 'fill'], steps: ['rooms', 'fit'] },
         { id: 'open', name: 'Doors and windows', note: 'Cut the doors and windows out of the building\'s wall so you can walk in and see out. Nothing is cut for you: you pick the faces, or place a model with the gizmo.', rows: ['opening', 'models'], steps: ['open', 'portal'] },
         { id: 'repair', name: 'Clean up the model', note: 'Take out what is in the way: fake doors, painted-on windows, vents, solid collision. Then close the holes that leaves.', rows: ['faces', 'parts', 'edges', 'collision'], steps: ['col', 'colclear'] },
         { id: 'props', name: 'Props and small removals', note: 'Props, plants and small model pieces that are in the way. Click one in the view and remove it.', rows: ['plants'], steps: ['plants'] },
@@ -64,8 +64,9 @@ window.MLO = window.MLO || {};
         frame: ['Click a flat floor of the model: sets the corner and the floor height.', 'Click a straight wall: squares the grid to it.', 'Shift+click a wall: the floor is its bottom edge. Alt+click: moves the corner (0, 0) there.'],
         level: ['Drag the blue arrow up or down until the rooms\' floor matches the building\'s floor.', 'Ctrl snaps to 5 cm, Shift moves finely, Esc cancels.', 'Or click a floor of the model to put the rooms\' floor at its height.'],
         room: ['Drag a rectangle in the building: it becomes floor, walls and ceiling.', 'Corners snap to the building\'s wall corners (yellow cross), edges to its walls and to 5 cm (Shift: no snapping).', 'Move or resize a room afterwards with the Select tool (V).'],
+        poly: ['Click each corner of the room; click the first corner (or press Enter) to close it. Backspace takes the last corner back, Esc cancels.', 'Corners snap to the building\'s corners, to where two walls cross and onto its walls at any angle (diagonal ones too); between them 15° steps and 5 cm. Shift: no snapping.', 'Where it touches another room the two are one room (no wall between). Select it (V) to drag its corners or divide it evenly.'],
         cut: ['Drag a rectangle over a room: that part is taken out (a column, a closet).', 'Same snapping as Add room.'],
-        part: ['Drag a straight line to build a wall inside the interior.', 'Doors and windows in it come from the opening tools.'],
+        part: ['Drag a straight line to build a wall inside the interior. It turns square to the grid, 45° or along a nearby wall (diagonal walls too).', 'It slides onto 1/2, 1/3, 2/3, 1/4 or 3/4 of the space between the walls beside it (the label shows it), and its ends go onto the walls. Shift: free.', 'To split a room into equal parts: select it and use Divide evenly.'],
         fill: ['Green areas are gaps between your rooms. Click one to fill it.', 'Shift+click fills a closed hole of any size; "Fill all" does every green area.'],
         door: ['Click the faces of a door on the building: the flat patch under the pointer lights up (Shift: just one triangle).', 'The faces are cut out and the opening is filled with the door model.', 'Delete in the panel gives the faces back.'],
         window: ['Click the faces of a window on the building: the flat patch under the pointer lights up (Shift: just one triangle).', 'The faces are cut out and the opening is filled with glass and a frame.', 'Delete in the panel gives the faces back.'],
@@ -90,8 +91,9 @@ window.MLO = window.MLO || {};
         level: 'Drag the blue arrow up or down to raise or lower all the rooms against the model, until the floor matches the building. Ctrl snaps to 5 cm, Shift moves finely, Esc or right-click cancels. Or click a floor of the model to put the rooms\' floor at that height. The cutters stay where they are on the model.',
         room: 'Drag a rectangle to add it to the interior (floor, walls, ceiling). Its edges snap to the model\'s own walls and to 5 cm.',
         cut: 'Drag a rectangle to take it out of the interior (a column, a closet).',
+        poly: 'A room of any shape: click its corners in order, click the first one again (or press Enter) to close it. Every edge becomes a wall, at any angle, with the floor and ceiling inside. Doors and windows cut on those walls (Door, Window, Archway and placed models) open them and get portals, like on the square rooms. Where an angled room touches a square room or another angled room, the two are one room: no wall is built between them, so draw a partition there if you want one. Select it to drag its corners (they snap like when drawing), drag its inside to move it, or divide it into equal parts with partitions square to one of its walls.',
         fill: 'Green areas are gaps between your rooms (no wider than "Largest gap"). Click one to fill it as part of the interior. Shift+click a closed hole fills it whatever its size. "Fill all" fills every green area.',
-        part: 'Drag a straight line to build an interior wall. Doors in it come from the Door tool.',
+        part: 'Drag a straight line to build an interior wall. The direction snaps to the grid, to 45 degrees and to the walls around it, the diagonal ones too (Shift: free). While you draw, the wall slides onto an even spacing between the parallel walls on either side (halves, thirds, quarters: the label says which) and both ends go onto the walls they reach within 40 cm, so walls are evenly placed and closed. Doors in it come from the Door tool or the opening tools.',
         door: 'Click the faces of a door on the model (the flat patch under the pointer lights up; Shift: just one triangle). The faces are cut out and the opening is filled with the door model you chose in the Import tab. In the panel: Double doors, Turn around, Across the wall. Delete gives the faces back.',
         window: 'Click the faces of a window on the model (the flat patch under the pointer lights up; Shift: just one triangle). The faces are cut out and the opening is filled with a pane of glass. Delete gives the faces back.',
         arch: 'Click a wall to cut a wide, tall opening (1.6 x 2.3 m by default) with a box, like a boolean in Blender.',
@@ -115,6 +117,26 @@ window.MLO = window.MLO || {};
 
     function numField(label, get, set, step, unit) {
         return el('div', { class: 'row' }, el('label', null, label), el('input', { type: 'number', class: 'grow', step: step || '0.01', value: get(), onchange: (e) => { const v = parseFloat(e.target.value); if (!isNaN(v)) set(v); } }), unit ? el('span', { class: 'note' }, unit) : null);
+    }
+
+    // "Divide evenly": n equal parts with partitions; ways = [[value, label]] for the direction
+    function divideRow(root, k, run, ways) {
+        const st = S.divide = S.divide || { n: 2, way: ways[0][0] };
+        if (!ways.some(w => w[0] === st.way)) st.way = ways[0][0];
+        root.append(el('div', { class: 'h' }, 'Divide evenly'));
+        root.append(el('div', { class: 'row' }, el('label', null, 'Parts'), el('input', { type: 'number', class: 'grow', min: '2', max: '20', step: '1', value: String(st.n), onchange: (e) => { st.n = Math.max(2, Math.min(20, parseInt(e.target.value, 10) || 2)); } })));
+        if (ways.length > 1) root.append(el('div', { class: 'row' }, el('select', { class: 'grow', onchange: (e) => { st.way = e.target.value; } }, ...ways.map(w => el('option', { value: String(w[0]), selected: String(w[0]) === String(st.way) ? true : null }, w[1])))));
+        root.append(el('div', { class: 'row' }, el('button', { class: 'btn sm primary', onclick: () => { const n = run(st.n, st.way); toast(n ? n + ' partition' + (n === 1 ? '' : 's') + ' added: ' + st.n + ' equal parts.' : 'Nothing to divide.', n ? 'ok' : 'warn'); M.UI.renderLeft(); } }, 'Divide into ' + st.n + ' equal parts')));
+    }
+    UI2.divideRow = divideRow;
+    // a window cut from faces: its depth set so that its frame's room side (the bars are 7 cm deep) lies in the interior wall's face
+    function flushCutter(k, quiet) {
+        const kn = [-Math.sin(k.yaw), Math.cos(k.yaw)], w = M.ShellTools.wallFaceNear(k.cx, k.cy, [Math.cos(k.yaw), Math.sin(k.yaw)], 1.0);
+        if (!w) { if (!quiet) toast('No interior wall within 1 m along this window. Draw the room first.', 'warn'); return false; }
+        const sPos = (w.p[0] - k.cx) * kn[0] + (w.p[1] - k.cy) * kn[1], dd = r3(sPos + 0.035);
+        if (dd < IM.DEPTH_MIN || dd > IM.DEPTH_MAX) { if (!quiet) toast('The interior wall is ' + f2(Math.abs(sPos) * 100, 0) + ' cm from the window faces: more than the window can be moved (' + f2(IM.DEPTH_MIN * 100, 0) + ' to +' + f2(IM.DEPTH_MAX * 100, 0) + ' cm).', 'warn'); return false; }
+        IT.updateCutter(k.id, q => { q.dd = dd; }); if (!quiet) { toast('Window flat with the interior wall (depth ' + f2(dd, 3) + ' m).', 'ok'); M.UI.renderLeft(); }
+        return true;
     }
 
     // ---------------- Import tab ----------------
@@ -381,14 +403,14 @@ window.MLO = window.MLO || {};
     // green is the one the tools work on: clicking another switches to it (its rooms replace the ones in the view).
     // the buildings as one dropdown row (the active one's name and what it holds); the list is inside
     function buildingPicker(root) {
-        const P = S.project, list = Model.bldAll(P), act = list.find(b => b.active) || list[0], d = act.d, rooms = d.shell.ops.filter(o => o.op === 'add').length, opens = (d.import.cutters || []).length + (d.import.fits || []).length;
+        const P = S.project, list = Model.bldAll(P), act = list.find(b => b.active) || list[0], d = act.d, rooms = d.shell.ops.filter(o => o.op === 'add').length + (d.shell.polys || []).length, opens = (d.import.cutters || []).length + (d.import.fits || []).length;
         sec(root, 'bld', act.name, { sum: (rooms ? rooms + ' room' + (rooms === 1 ? '' : 's') : 'no rooms') + (opens ? ' · ' + opens + ' opening' + (opens === 1 ? '' : 's') : '') + (list.length > 1 ? ' · 1 of ' + list.length : '') }, b => buildingsBlock(b, true));
     }
     function buildingsBlock(root, inSec) {
         const P = S.project, list = Model.bldAll(P), k = kit();
         if (!inSec) root.append(el('div', { class: 'h' }, 'Buildings (' + list.length + ')'));
         list.forEach(b => {
-            const d = b.d, rooms = d.shell.ops.filter(o => o.op === 'add').length, opens = (d.import.cutters || []).length, boxes = (d.import.cboxes || []).length, sel = !!(d.import.building && d.import.building.parts && d.import.building.parts.length);
+            const d = b.d, rooms = d.shell.ops.filter(o => o.op === 'add').length + (d.shell.polys || []).length, opens = (d.import.cutters || []).length, boxes = (d.import.cboxes || []).length, sel = !!(d.import.building && d.import.building.parts && d.import.building.parts.length);
             const info = (rooms || opens || boxes) ? [rooms ? rooms + ' room' + (rooms === 1 ? '' : 's') : null, opens ? opens + ' opening' + (opens === 1 ? '' : 's') : null, boxes ? boxes + ' box' + (boxes === 1 ? '' : 'es') : null].filter(Boolean).join(', ') : (sel ? 'nothing built yet' : 'no building picked yet');
             const name = b.active
                 ? el('input', { value: b.name, title: 'Rename', style: { width: '100%', boxSizing: 'border-box', background: 'transparent', border: '1px solid transparent', fontWeight: 600, color: 'inherit', padding: '1px 3px' }, onclick: (e) => e.stopPropagation(), onchange: (e) => { if (Model.renameBuilding(b.id, e.target.value)) M.UI.renderLeft(); else e.target.value = b.name; } })
@@ -579,6 +601,8 @@ window.MLO = window.MLO || {};
                     + (sel.type === 'window' ? 'The opening is filled with glass.' : (sel.leaf ? 'The door model stands in it.' : ''))));
                 root.append(numField('Depth in the wall', () => f2(IM.depthOf(sel), 3), v => upd('dd', Math.min(IM.DEPTH_MAX, Math.max(IM.DEPTH_MIN, v))), '0.01', 'm'));
                 root.append(el('div', { class: 'note' }, 'Between ' + f2(IM.DEPTH_MIN * 100, 0) + ' cm (inside the wall) and +' + f2(IM.DEPTH_MAX * 100, 0) + ' cm (in front of the cut-out faces, for a window that is set back behind the siding).'));
+                if (sel.type === 'window') root.append(el('div', { class: 'row wrap' }, el('button', { class: 'btn sm primary', title: 'Move the glass and frame across the wall so the frame\'s room side is flat with the interior wall', onclick: () => flushCutter(sel) }, 'Flush with the interior wall'),
+                    el('button', { class: 'btn sm', title: 'Every window cut out of the faces: flat with the interior wall', onclick: () => Model.bldAll(S.project).find(b => b.active).d.import.cutters.filter(c => c.face && c.type === 'window').forEach(c => flushCutter(c, true)) || toast('Windows moved flat with the interior wall where one is near.', 'ok') }, 'All windows')));
                 root.append(el('div', { class: 'note' }, 'Where the ' + (sel.type === 'window' ? 'glass' : 'door') + ' sits: 0 is the outside surface of the cut-out faces, negative is into the wall. It is set from the frame the model has left around the opening.'));
                 if (sel.type === 'window' || sel.type === 'door') {
                     const gp = IM.gapAround(sel);
@@ -637,6 +661,7 @@ window.MLO = window.MLO || {};
                 numField('Back y', () => f2(o.r[1]), v => setR(r => { const d = r[3] - r[1]; r[1] = r3(v); r[3] = r3(v + d); }), '0.05', 'm'),
                 numField('Width', () => f2(o.r[2] - o.r[0]), v => setR(r => { r[2] = r3(r[0] + Math.max(0.2, v)); }), '0.05', 'm'),
                 numField('Depth', () => f2(o.r[3] - o.r[1]), v => setR(r => { r[3] = r3(r[1] + Math.max(0.2, v)); }), '0.05', 'm'));
+            if (o.op === 'add') divideRow(root, k, (n, along) => M.ShellTools.divideRect(oi, n, along), [['auto', 'Across the long side'], ['x', 'Along x'], ['y', 'Along y']]);
             root.append(el('div', { class: 'row' }, el('button', { class: 'btn sm danger', onclick: () => IT.deleteRoom() }, 'Delete')));
         }
 
@@ -654,7 +679,7 @@ window.MLO = window.MLO || {};
         });
 
         // the room edges against the building's own walls: the interior only lines up with the outside when its edges lie exactly on the walls
-        sec(root, 'rects', 'Rooms (' + sh.ops.filter(o => o.op === 'add').length + ')', { sum: (sh.lights || []).length + ' light' + ((sh.lights || []).length === 1 ? '' : 's') }, (root) => {
+        sec(root, 'rects', 'Rooms (' + (sh.ops.filter(o => o.op === 'add').length + (sh.polys || []).length) + ')', { sum: (sh.lights || []).length + ' light' + ((sh.lights || []).length === 1 ? '' : 's') }, (root) => {
         if (IM.loaded && sh.ops.some(o => o.op === 'add')) {
             const fit = IM.fitRooms(), worst = fit.reduce((a, f) => Math.max(a, Math.abs(f.to - f.from)), 0);
             root.append(el('div', { class: 'h' }, 'Fit to the building'));
@@ -666,7 +691,10 @@ window.MLO = window.MLO || {};
         sh.ops.forEach((o, i) => list.append(el('div', { class: 'pitem', style: { padding: '4px 8px', background: S.opSel === i ? 'rgba(80,200,130,0.18)' : '' }, title: 'Click to select it', onclick: () => { if (S.shellTool !== 'select') M.App.setTool('select'); S.opSel = i; S.shellSel = null; S.cutSel = null; M.UI.renderLeft(); }, onmouseenter: () => { S.hoverOp = i; }, onmouseleave: () => { S.hoverOp = null; } },
             el('b', null, o.op === 'add' ? 'Add' : 'Cut'), el('span', { class: 'note' }, f2(o.r[2] - o.r[0]) + ' x ' + f2(o.r[3] - o.r[1]) + ' m at ' + f2(o.r[0]) + ', ' + f2(o.r[1])),
             el('button', { class: 'btn sm danger', style: { marginLeft: 'auto' }, onclick: (e) => { e.stopPropagation(); S.hoverOp = null; S.opSel = null; Model.edit(Q => { Q.shell.ops.splice(i, 1); }); M.UI.renderLeft(); } }, 'x'))));
-        if (!sh.ops.length) list.append(el('div', { class: 'note' }, 'Nothing yet. Draw with Add room.'));
+        (sh.polys || []).forEach(pg => list.append(el('div', { class: 'pitem', style: { padding: '4px 8px', background: (S.shellSel && S.shellSel.id === pg.id) ? 'rgba(80,200,130,0.18)' : '' }, title: 'Click to select it', onclick: () => { if (S.shellTool !== 'select') M.App.setTool('select'); S.opSel = null; S.cutSel = null; S.shellSel = { kind: 'poly', id: pg.id }; M.UI.renderLeft(); } },
+            el('b', null, 'Angled'), el('span', { class: 'note' }, pg.pts.length + ' corners'),
+            el('button', { class: 'btn sm danger', style: { marginLeft: 'auto' }, onclick: (e) => { e.stopPropagation(); if (S.shellSel && S.shellSel.id === pg.id) S.shellSel = null; Model.edit(Q => { Q.shell.polys = (Q.shell.polys || []).filter(q => q.id !== pg.id); }); M.UI.renderLeft(); } }, 'x'))));
+        if (!sh.ops.length && !(sh.polys || []).length) list.append(el('div', { class: 'note' }, 'Nothing yet. Draw with Add room or Angled room.'));
         root.append(list);
         });
         sec(root, 'camera', 'Camera and keys', {}, b => b.append(el('div', { class: 'note' }, 'Like Blender: middle-drag orbits (Shift pans, Ctrl zooms), right-drag also orbits · wheel zoom · keypad 1 / 3 / 7 front / right / top (Ctrl: opposite), 4 6 8 2 step the orbit, Home frames everything · WASD move · Q/E turn · T top-down. Right-click or Esc cancels a drag.')));
@@ -772,7 +800,7 @@ window.MLO = window.MLO || {};
     // and where to go. The Build and Import tabs show the next one; the Export tab shows them all.
     function steps() {
         const P = S.project, I = P.import, f = I.frame, sh = P.shell, out = [];
-        const ncol = (IM.files || []).filter(x => x.kind === 'collision').length, hasRooms = sh.ops.some(o => o.op === 'add'), lights = (sh.lights || []).length;
+        const ncol = (IM.files || []).filter(x => x.kind === 'collision').length, hasRooms = Shell.hasRooms(sh), lights = (sh.lights || []).length;
         const hasCut = I.cutters.length > 0 || (I.fits || []).length > 0, doors = I.cutters.some(k => k.type === 'door');
         const add = (id, sev, title, done, go, why) => out.push({ id, sev, title, done: !!done, go, why });
         add('model', 'must', 'Import the model', IM.targetModel(), { tab: 'import' }, 'Import tab: add the .ydr, .ytd and collision files of the building.');
@@ -853,7 +881,7 @@ window.MLO = window.MLO || {};
     function safeRes(s) { return (s || '').toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40); }
     // the prefix of a building's files: the project's prefix for the first building, the prefix and the building's number for the others (a building keeps its number)
     function prefixOf(P, rec) { const sfx = (rec && rec.sfx && P.import.buildings.length > 1) ? rec.sfx : '', base = (P.prefix || 'mlo').slice(0, 10 - sfx.length); return base + sfx; }       // (a project with one building uses the plain prefix)
-    const hasRooms = (d) => d.shell.ops.some(o => o.op === 'add');
+    const hasRooms = (d) => Shell.hasRooms(d.shell);
     let ex = {};
     UI2.renderExport = function (root) {
         const P = S.project, X = P.export, I = P.import, k = kit(); ex = {};

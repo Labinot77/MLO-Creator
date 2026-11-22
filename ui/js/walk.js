@@ -91,6 +91,7 @@ window.MLO = window.MLO || {};
         // the interior's own collision and your boxes
         (built.boxes || []).forEach(b => {
             const ex = b[7], bit = ex && ex.user ? 2 : 1;
+            if (ex && ex.prism) { markPoly(ex.prism, () => [b[2], b[5], true], bit); return; }
             if (ex && ex.yaw != null) { const c = Math.cos(ex.yaw), s = Math.sin(ex.yaw), pts = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(q => [ex.cx + q[0] * ex.hu * c - q[1] * ex.hn * s, ex.cy + q[0] * ex.hu * s + q[1] * ex.hn * c]); markPoly(pts, () => [b[2], b[5], true], bit); }
             else markBox(b[0], b[3], b[1], b[4], b[2], b[5], bit);
         });

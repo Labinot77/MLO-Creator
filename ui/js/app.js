@@ -55,7 +55,7 @@ window.MLO = window.MLO || {};
             App._fk = fk; App._bk = bk; if (again && IM.loaded) IM.rebuild(); else if (pk !== App._pk && IM.loaded && M.Plants && M.Plants.shows()) IM.rebuild();
             App._pk = pk;
             if (ck !== App._ck) { App._ck = ck; IM.requestCut(); IM.requestCollision(); }
-            const rk = JSON.stringify([S.project.shell.ops, S.project.settings.ceilH, I.clearCollision, I.entity, I.colDeletes]);      // the rooms are cut out of the collision: it changes when they do
+            const rk = JSON.stringify([S.project.shell.ops, S.project.shell.polys, S.project.settings.ceilH, I.clearCollision, I.entity, I.colDeletes]);      // the rooms are cut out of the collision: it changes when they do
             if (rk !== App._rk) { App._rk = rk; if (IM.loaded) IM.requestCollision(); }
         } else if (isVanilla()) {
             App.built = M.Shell.build(S.project, {});
@@ -85,7 +85,7 @@ window.MLO = window.MLO || {};
     App.setTool = function (tool) {
         M.Errors.crumb('tool ' + tool);
         if (isShell()) {
-            const ok = isImport() ? ['building', 'frame', 'level', 'room', 'cut', 'fill', 'part', 'door', 'window', 'arch', 'floor', 'light', 'figure', 'faces', 'edges', 'parts', 'collision', 'cbox', 'walk', 'fit', 'plants', 'select', 'eraser', 'paint'] : ['room', 'cut', 'part', 'door', 'window', 'arch', 'floor', 'select', 'eraser', 'paint'];
+            const ok = isImport() ? ['building', 'frame', 'level', 'room', 'poly', 'cut', 'fill', 'part', 'door', 'window', 'arch', 'floor', 'light', 'figure', 'faces', 'edges', 'parts', 'collision', 'cbox', 'walk', 'fit', 'plants', 'select', 'eraser', 'paint'] : ['room', 'poly', 'cut', 'part', 'door', 'window', 'arch', 'floor', 'select', 'eraser', 'paint'];
             if (ok.indexOf(tool) < 0) return;
             if (tool === 'paint') { S.shellTool = 'paint'; App.setTab('paint'); return; }
             if (tool === 'collision' && isImport() && !S.showCollision) { S.showCollision = true; M.ImportModel.requestCollision(); M.UI.renderRight(); }       // the pieces to pick are the orange lines

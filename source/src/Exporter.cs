@@ -23,7 +23,7 @@ namespace MloCreator
     }
 
     class MatData { public string Tex; public bool Glass; public float[] Pos, Nrm, Uv; public int[] Idx; public byte[] Col; }
-    class LightData { public double X, Y, Z; public int R, G, B; public double Intensity, Falloff, Exponent; }
+    class LightData { public double X, Y, Z; public int R, G, B, Flags; public double Intensity, Falloff, Exponent; }
     class GroupData
     {
         public string Name; public int Room, Flags; public double Lod;
@@ -197,7 +197,7 @@ namespace MloCreator
                     s.AppendLine("  <Item>");
                     s.AppendLine("   " + Vec("Position", new V3(l.X, l.Y, l.Z)));
                     s.AppendLine("   <Colour r=\"" + l.R + "\" g=\"" + l.G + "\" b=\"" + l.B + "\" />");
-                    s.AppendLine("   <Flashiness value=\"0\" />\n   <Intensity value=\"" + F(l.Intensity) + "\" />\n   <Flags value=\"0\" />\n   <BoneId value=\"0\" />\n   <Type>Point</Type>\n   <GroupId value=\"0\" />\n   <TimeFlags value=\"16777215\" />");
+                    s.AppendLine("   <Flashiness value=\"0\" />\n   <Intensity value=\"" + F(l.Intensity) + "\" />\n   <Flags value=\"" + l.Flags + "\" />\n   <BoneId value=\"0\" />\n   <Type>Point</Type>\n   <GroupId value=\"0\" />\n   <TimeFlags value=\"16777215\" />");
                     s.AppendLine("   <Falloff value=\"" + F(l.Falloff) + "\" />\n   <FalloffExponent value=\"" + F(l.Exponent) + "\" />");
                     s.AppendLine("   <CullingPlaneNormal x=\"0\" y=\"0\" z=\"1\" />\n   <CullingPlaneOffset value=\"" + F(l.Falloff) + "\" />\n   <Unknown45 value=\"0\" />\n   <Unknown46 value=\"0\" />");
                     s.AppendLine("   <VolumeIntensity value=\"1\" />\n   <VolumeSizeScale value=\"1\" />\n   <VolumeOuterColour r=\"255\" g=\"255\" b=\"255\" />\n   <LightHash value=\"" + (600 + n * 7) + "\" />");
@@ -290,26 +290,52 @@ namespace MloCreator
             foreach (GroupData g in groups) s.Append(EntityXml(P + g.Name, g.Flags, g.Lod));
             foreach (DoorData d in doors) s.Append(PropEntityXml(d.Name, d.X, d.Y, d.Z, d.Heading, d.ScaleXY, d.ScaleZ));
             s.AppendLine("   </entities>");
+            // A door stands in a portal, like the game's own interiors: it is attached to that portal (not to the room), so it is drawn and lit from both sides.
+            int[] doorPortal = DoorPortals(doors, portals);
             s.AppendLine("   <rooms itemType=\"CMloRoomDef\">");
             string rb = "<bbMin x=\"" + F(bmn.X) + "\" y=\"" + F(bmn.Y) + "\" z=\"" + F(bmn.Z) + "\" />\n     <bbMax x=\"" + F(bmx.X) + "\" y=\"" + F(bmx.Y) + "\" z=\"" + F(bmx.Z) + "\" />";
             for (int room = 0; room < 2; room++)
             {
                 List<string> att = new List<string>();
                 for (int i = 0; i < groups.Count; i++) if (groups[i].Room == room) att.Add(i.ToString());
-                if (room == 1) for (int i = 0; i < doors.Count; i++) att.Add((groups.Count + i).ToString());
+                if (room == 1) for (int i = 0; i < doors.Count; i++) if (doorPortal[i] < 0) att.Add((groups.Count + i).ToString());
                 string name = room == 0 ? "limbo" : mlo;
                 s.AppendLine("    <Item>\n     <name>" + name + "</name>\n     " + rb + "\n     <blend value=\"1\" />\n     <timecycleName>" + timecycle + "</timecycleName>\n     <secondaryTimecycleName />\n     <flags value=\"96\" />\n     <portalCount value=\"" + portals.Count + "\" />\n     <floorId value=\"0\" />\n     <exteriorVisibiltyDepth value=\"-1\" />\n     <attachedObjects>" + string.Join(" ", att.ToArray()) + "</attachedObjects>\n    </Item>");
             }
             s.AppendLine("   </rooms>\n   <portals itemType=\"CMloPortalDef\">");
-            foreach (PortalData p in portals)
+            for (int pi = 0; pi < portals.Count; pi++)
             {
+                PortalData p = portals[pi]; List<string> patt = new List<string>();
+                for (int i = 0; i < doors.Count; i++) if (doorPortal[i] == pi) patt.Add((groups.Count + i).ToString());
                 s.AppendLine("    <Item>\n     <roomFrom value=\"1\" />\n     <roomTo value=\"0\" />\n     <flags value=\"" + p.Flags + "\" />\n     <mirrorPriority value=\"0\" />\n     <opacity value=\"0\" />\n     <audioOcclusion value=\"0\" />\n     <corners>");
                 for (int k = 0; k < 4; k++) s.AppendLine("      <Item>" + F(p.C[k * 3]) + ", " + F(p.C[k * 3 + 1]) + ", " + F(p.C[k * 3 + 2]) + ", 0</Item>");
-                s.AppendLine("     </corners>\n     <attachedObjects />\n    </Item>");
+                s.AppendLine("     </corners>\n     " + (patt.Count > 0 ? "<attachedObjects>" + string.Join(" ", patt.ToArray()) + "</attachedObjects>" : "<attachedObjects />") + "\n    </Item>");
             }
             s.AppendLine("   </portals>\n   <entitySets itemType=\"CMloEntitySet\" />\n   <timeCycleModifiers itemType=\"CMloTimeCycleModifier\" />\n  </Item>");
             s.AppendLine(" </archetypes>\n <name>" + P + "types</name>\n <dependencies />\n <compositeEntityTypes itemType=\"CCompositeEntityType\" />\n</CMapTypes>");
             return s.ToString();
+        }
+
+        // the portal each door stands in (its hinge within 25 cm of the portal's plane and inside its outline, give or take a door's width), or -1
+        static int[] DoorPortals(List<DoorData> doors, List<PortalData> portals)
+        {
+            int[] r = new int[doors.Count];
+            for (int i = 0; i < doors.Count; i++)
+            {
+                r[i] = -1; double best = 1e9; V3 dp = new V3(doors[i].X, doors[i].Y, doors[i].Z);
+                for (int pi = 0; pi < portals.Count; pi++)
+                {
+                    double[] c = portals[pi].C; if (c == null || c.Length < 12) continue;
+                    V3 a = new V3(c[0], c[1], c[2]), b = new V3(c[3], c[4], c[5]), cc = new V3(c[6], c[7], c[8]), d = new V3(c[9], c[10], c[11]);
+                    V3 u = b - a, v = d - a, n = new V3(u.Y * v.Z - u.Z * v.Y, u.Z * v.X - u.X * v.Z, u.X * v.Y - u.Y * v.X); double nl = n.Len(), ul = u.Len(), vl = v.Len(); if (nl < 1e-6 || ul < 1e-6 || vl < 1e-6) continue;
+                    V3 w = dp - a; double plane = Math.Abs((w.X * n.X + w.Y * n.Y + w.Z * n.Z) / nl);
+                    double su = (w.X * u.X + w.Y * u.Y + w.Z * u.Z) / ul, sv = (w.X * v.X + w.Y * v.Y + w.Z * v.Z) / vl;
+                    if (plane > 0.25 || su < -0.3 || su > ul + 0.3 || sv < -0.3 || sv > vl + 0.3) continue;
+                    V3 mid = (a + cc) * 0.5; double dist = (dp - mid).Len();
+                    if (dist < best) { best = dist; r[i] = pi; }
+                }
+            }
+            return r;
         }
 
         static string YmapXml(string mapName, string mlo, double px, double py, double pz, double qz, double qw, V3 emn, V3 emx)
@@ -457,9 +483,9 @@ namespace MloCreator
                 }
 
                 // ---- baked ambient light (Ambient.cs) ----
-                List<GroupData> doorGroups = new List<GroupData>();
-                foreach (FitDoor fd in fit.Doors) doorGroups.Add(fd.G);
-                BakeAmbient(groups, doorGroups, log);
+                List<GroupData> doorGroups = new List<GroupData>(); List<V3> doorAt = new List<V3>();
+                foreach (FitDoor fd in fit.Doors) { doorGroups.Add(fd.G); doorAt.Add(new V3(fd.D.X, fd.D.Y, fd.D.Z)); }
+                BakeAmbient(groups, doorGroups, doorAt, portals, log);
 
                 // ---- write game files ----
                 YtdFile ytd = XmlYtd.GetYtd(txdXml, ddsDir);
