@@ -26,6 +26,72 @@ window.MLO = window.MLO || {};
 
     function uniq(a) { a.sort((p, q) => p - q); const o = []; for (const v of a) if (!o.length || Math.abs(v - o[o.length - 1]) > 1e-6) o.push(v); return o; }
 
+    // ---------------- angled rooms: polygons of any shape (shell.polys = [{ id, pts: [[x, y], ...], tex, wtex }]) ----------------
+    const pArea = (p) => { let a = 0; for (let i = 0; i < p.length; i++) { const q = p[i], r = p[(i + 1) % p.length]; a += q[0] * r[1] - r[0] * q[1]; } return a / 2; };
+    const crs = (a, b, c) => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+    // counter-clockwise, without repeated or straight-through corners
+    function cleanPoly(pts) {
+        let p = (pts || []).filter((q, i, a) => Math.hypot(q[0] - a[(i + 1) % a.length][0], q[1] - a[(i + 1) % a.length][1]) > 0.01);
+        for (let k = 0; k < 4 && p.length > 3; k++) p = p.filter((q, i, a) => { const A = a[(i + a.length - 1) % a.length], B = a[(i + 1) % a.length]; return Math.abs(crs(A, q, B)) > 1e-4 * Math.hypot(B[0] - A[0], B[1] - A[1]); });
+        if (p.length < 3 || Math.abs(pArea(p)) < 0.04) return null;
+        return pArea(p) < 0 ? p.slice().reverse() : p;
+    }
+    function polysOf(shell) { const o = []; ((shell && shell.polys) || []).forEach(pg => { const pts = cleanPoly(pg.pts); if (pts) o.push({ id: pg.id, pts, tex: pg.tex, wtex: pg.wtex }); }); return o; }
+    function inPoly(p, x, y) { let c = false; for (let i = 0, j = p.length - 1; i < p.length; j = i++) { const a = p[i], b = p[j]; if ((a[1] > y) !== (b[1] > y) && x < (b[0] - a[0]) * (y - a[1]) / (b[1] - a[1]) + a[0]) c = !c; } return c; }
+    // ear clipping (p counter-clockwise): index triples
+    function triangulate(p) {
+        const idx = p.map((_, i) => i), out = [];
+        for (let guard = 0; idx.length > 3 && guard < 10000; guard++) {
+            let cut = false;
+            for (let i = 0; i < idx.length && !cut; i++) {
+                const ia = idx[(i + idx.length - 1) % idx.length], ib = idx[i], ic = idx[(i + 1) % idx.length], a = p[ia], b = p[ib], c = p[ic];
+                if (crs(a, b, c) <= 1e-9) continue;
+                if (idx.some(k => k !== ia && k !== ib && k !== ic && crs(a, b, p[k]) >= -1e-9 && crs(b, c, p[k]) >= -1e-9 && crs(c, a, p[k]) >= -1e-9)) continue;
+                out.push([ia, ib, ic]); idx.splice(i, 1); cut = true;
+            }
+            if (!cut) break;
+        }
+        if (idx.length === 3) out.push(idx.slice());
+        return out;
+    }
+    // every edge moved d into the polygon, corners where the moved edges meet (mitred)
+    function inset(p, d) {
+        const n = p.length, L = (i) => { const a = p[i], b = p[(i + 1) % n], l = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1, t = [(b[0] - a[0]) / l, (b[1] - a[1]) / l]; return { a: [a[0] - t[1] * d, a[1] + t[0] * d], t }; };
+        return p.map((q, i) => {
+            const e0 = L((i + n - 1) % n), e1 = L(i), den = e0.t[0] * e1.t[1] - e0.t[1] * e1.t[0];
+            if (Math.abs(den) < 1e-6) return [q[0] - e1.t[1] * d, q[1] + e1.t[0] * d];
+            const s = ((e1.a[0] - e0.a[0]) * e1.t[1] - (e1.a[1] - e0.a[1]) * e1.t[0]) / den;
+            return [e0.a[0] + e0.t[0] * s, e0.a[1] + e0.t[1] * s];
+        });
+    }
+    // the polygon as boxes turned by `ang`: strips `step` wide, each only as long as the polygon is at both of its sides (so no box reaches outside)
+    function stripBoxes(pts, ang, step) {
+        const c = Math.cos(ang), s = Math.sin(ang), loc = pts.map(q => [q[0] * c + q[1] * s, -q[0] * s + q[1] * c]);
+        const cutAt = (v) => { const xs = []; loc.forEach((a, i) => { const b = loc[(i + 1) % loc.length]; if ((a[1] > v) !== (b[1] > v)) xs.push(a[0] + (v - a[1]) * (b[0] - a[0]) / (b[1] - a[1])); }); xs.sort((p, q) => p - q); const o = []; for (let k = 0; k + 1 < xs.length; k += 2) o.push([xs[k], xs[k + 1]]); return o; };
+        const both = (A, B) => { const o = []; let i = 0, j = 0; while (i < A.length && j < B.length) { const lo = Math.max(A[i][0], B[j][0]), hi = Math.min(A[i][1], B[j][1]); if (hi - lo > 0.02) o.push([lo, hi]); if (A[i][1] < B[j][1]) i++; else j++; } return o; };
+        let v0 = 1e9, v1 = -1e9; loc.forEach(q => { v0 = Math.min(v0, q[1]); v1 = Math.max(v1, q[1]); });
+        const n = Math.max(1, Math.min(800, Math.ceil((v1 - v0) / step - 1e-6))), h = (v1 - v0) / n, done = [], open = [];
+        for (let j = 0; j < n; j++) {
+            const a = v0 + j * h, iv = both(cutAt(a + 1e-5), cutAt(a + h - 1e-5)), next = [];
+            iv.forEach(w => { const o = open.find(b => Math.abs(b.u0 - w[0]) < 1e-4 && Math.abs(b.u1 - w[1]) < 1e-4); if (o) { o.v1 = a + h; next.push(o); } else next.push({ u0: w[0], u1: w[1], v0: a, v1: a + h }); });
+            open.forEach(b => { if (next.indexOf(b) < 0) done.push(b); }); open.length = 0; next.forEach(b => open.push(b));
+        }
+        open.forEach(b => done.push(b));
+        return done.map(b => { const um = (b.u0 + b.u1) / 2, vm = (b.v0 + b.v1) / 2; return { cx: um * c - vm * s, cy: um * s + vm * c, w: b.u1 - b.u0, d: b.v1 - b.v0, yaw: ang }; });
+    }
+    // the turn of the strips that needs the fewest boxes (the edges of the polygon decide it)
+    function polyBoxes(pts, step) {
+        const angs = []; pts.forEach((a, i) => { const b = pts[(i + 1) % pts.length]; let g = Math.atan2(b[1] - a[1], b[0] - a[0]) % (Math.PI / 2); if (g < 0) g += Math.PI / 2; if (!angs.some(x => Math.abs(x - g) < 1e-3)) angs.push(g); });
+        let best = null; angs.forEach(g => { const b = stripBoxes(pts, g, step || 0.1); if (!best || b.length < best.length) best = b; });
+        return best || [];
+    }
+    // all the rooms as boxes in the grid's frame: the rectangles (turn 0) and the angled rooms (turned strips); `ins` moves the angled rooms' edges in
+    function roomBoxes(shell, ins) {
+        const out = gridRects(shell).map(r => ({ cx: (r[0] + r[2]) / 2, cy: (r[1] + r[3]) / 2, w: r[2] - r[0], d: r[3] - r[1], yaw: 0, rect: r }));
+        polysOf(shell).forEach(pg => { const p = ins ? inset(pg.pts, ins) : pg.pts; if (Math.abs(pArea(p)) > 0.02) polyBoxes(p).forEach(b => out.push(b)); });
+        return out;
+    }
+
     // compressed grid of the region (union of 'add' rects minus 'cut' rects, in order)
     function regionGrid(shell, extraX, extraY) {
         const xs = [], ys = [];
@@ -142,12 +208,30 @@ window.MLO = window.MLO || {};
             const ex = Math.abs(c) * hu + Math.abs(s) * hn, ey = Math.abs(s) * hu + Math.abs(c) * hn;
             boxes.push([cx - ex, cy - ey, z0, cx + ex, cy + ey, z1, mi, square ? { user: id } : { user: id, cx, cy, hu, hn, yaw }]);          // (square to the grid: the box around it is the box)
         }
+        // a three-sided upright prism (floor and ceiling of an angled room): tri = three [x, y] corners
+        function cprism(tri, z0, z1, type, room) {
+            if (!wantBoxes) return;
+            const mk = type + '|' + room; let mi = matIdx.get(mk);
+            if (mi === undefined) { mi = matList.length; matList.push([type, room]); matIdx.set(mk, mi); }
+            const xs = tri.map(q => q[0]), ys = tri.map(q => q[1]);
+            boxes.push([Math.min(...xs), Math.min(...ys), z0, Math.max(...xs), Math.max(...ys), z1, mi, { prism: tri.map(q => [q[0], q[1]]) }]);
+        }
 
         // ---------------- region, floors, ceiling ----------------
         const fx = [], fy = [];
         (S.floors || []).forEach(f => { fx.push(f.r[0], f.r[2]); fy.push(f.r[1], f.r[3]); });
         const g = regionGrid(S, fx, fy);
-        const inRegion = (x, y) => { for (let i = 0; i < g.nx; i++) if (x >= g.X[i] && x < g.X[i + 1]) { for (let j = 0; j < g.ny; j++) if (y >= g.Y[j] && y < g.Y[j + 1]) return g.mask[i][j]; } return false; };
+        const inGrid = (x, y) => { for (let i = 0; i < g.nx; i++) if (x >= g.X[i] && x < g.X[i + 1]) { for (let j = 0; j < g.ny; j++) if (y >= g.Y[j] && y < g.Y[j + 1]) return g.mask[i][j]; } return false; };
+        const polys = polysOf(S), inPolyAny = (x, y, skip) => polys.some((pg, i) => i !== skip && inPoly(pg.pts, x, y));
+        const inRegion = (x, y) => inGrid(x, y) || inPolyAny(x, y, -1);
+        // the parts of [u0, u1] where test(u) holds, edges found to 2 mm
+        const runs = (u0, u1, test) => {
+            const out = [], n = Math.max(1, Math.ceil((u1 - u0) / 0.05)), h = (u1 - u0) / n, edge = (a, b, va) => { for (let k = 0; k < 9; k++) { const m = (a + b) / 2; if (test(m) === va) a = m; else b = m; } return (a + b) / 2; };
+            let prev = test(u0 + h / 2), start = prev ? u0 : null;
+            for (let k = 1; k < n; k++) { const u = u0 + (k + 0.5) * h, v = test(u); if (v !== prev) { const e = edge(u - h, u, prev); if (v) start = e; else { out.push([start, e]); start = null; } prev = v; } }
+            if (start != null) out.push([start, u1]);
+            return out.filter(r => r[1] - r[0] > 0.01);
+        };
         const floorTexAt = (cx, cy) => { let t = D.floor; (S.floors || []).forEach(f => { if (cx > f.r[0] && cx < f.r[2] && cy > f.r[1] && cy < f.r[3]) t = f.tex; }); return t; };
         {
             const cells = [], used = [];
@@ -219,6 +303,15 @@ window.MLO = window.MLO || {};
         // a piece of wall: inner face over [u0,u1] x [z0,z1]; collision box reaches `depth` outward and `ext` past the ends
         function wallPiece(sg, u0, u1, z0, z1, extLo, extHi) {
             if (u1 - u0 < 1e-5 || z1 - z0 < 1e-5) return;
+            // where an angled room lies behind the wall the rooms are one: no wall there
+            if (polys.length) {
+                const o = sg.c - sg.inward * 0.08, behind = (u) => sg.o === 'H' ? inPolyAny(u, o, -1) : inPolyAny(o, u, -1), gaps = runs(u0, u1, behind);
+                if (gaps.length) { let cur = u0; gaps.forEach(r => { wallBit(sg, cur, r[0], z0, z1, cur === u0 ? extLo : 0, 0); cur = r[1]; }); wallBit(sg, cur, u1, z0, z1, 0, extHi); return; }
+            }
+            wallBit(sg, u0, u1, z0, z1, extLo, extHi);
+        }
+        function wallBit(sg, u0, u1, z0, z1, extLo, extHi) {
+            if (u1 - u0 < 1e-5 || z1 - z0 < 1e-5) return;
             const tex = sg.tex || D.wallInt, ci = ciOf(sg);
             // (walls = 'skin' has no wall faces of its own, but still the collision: the building's collision is cleared out of the rooms, so the walls need it from here)
             if (!skin) { if (sg.o === 'H') pq('wall', 'int', tex, false, 'y', ci, z0, z1, u0, u1, sg.inward); else pq('wall', 'int', tex, false, 'x', ci, u0, u1, z0, z1, sg.inward); }
@@ -285,7 +378,7 @@ window.MLO = window.MLO || {};
 
         // ---------------- the building's own walls, turned inwards (walls = 'skin') ----------------
         if (skin && M.ImportModel && M.ImportModel.wallFaces) {
-            const inRoom = (x, y) => { for (let i = 0; i < g.nx; i++) if (x >= g.X[i] && x < g.X[i + 1]) { for (let j = 0; j < g.ny; j++) if (y >= g.Y[j] && y < g.Y[j + 1]) return g.mask[i][j]; } return false; };
+            const inRoom = inRegion;
             let n = 0;
             M.ImportModel.wallFaces().forEach(f => {
                 const nh = Math.hypot(f.n[0], f.n[1]); if (nh < 0.5 || f.c[2] < -0.3 || f.c[2] > H + 0.3) return; const nx = f.n[0] / nh, ny = f.n[1] / nh;
@@ -322,6 +415,82 @@ window.MLO = window.MLO || {};
             piece(cur, pt.u1, 0, H);
         });
 
+        // ---------------- angled rooms (polygons) and angled partitions: walls at any angle ----------------
+        // Every cutter and placed model is an opening in a straight wall it lies along (turned the same way, within 6 degrees) and passes through.
+        const ksp = (((project.import && project.import.cutters) || []).concat(fitCut)).map(k => {
+            const fe = M.ImportModel && M.ImportModel.doorFrameExtent ? M.ImportModel.doorFrameExtent(k) : null;
+            const type = k.face ? k.type : (k.type === 'arch' ? 'arch' : ((k.type === 'window' || (k.type === 'door' && k.zb > 0.3)) ? 'window' : 'door'));
+            return { cx: k.cx, cy: k.cy, ux: Math.cos(k.yaw), uy: Math.sin(k.yaw), ju: fe ? fe.cu : k.w / 2, hd: k.d / 2, z0: Math.max(0, k.zb), z1: Math.min(H, fe ? fe.ct : k.zb + k.h), type, face: !!k.face };
+        });
+        const lineOps = (A, t, ua, ub, reach) => {
+            const out = [];
+            ksp.forEach(k => {
+                if (Math.abs(k.ux * t[1] - k.uy * t[0]) > 0.105) return;
+                const dx = k.cx - A[0], dy = k.cy - A[1], n = -dx * t[1] + dy * t[0]; if (Math.abs(n) > k.hd + reach) return;
+                const uc = dx * t[0] + dy * t[1], u0 = Math.max(ua, uc - k.ju), u1 = Math.min(ub, uc + k.ju);
+                if (u1 - u0 >= 0.04 && k.z1 - k.z0 >= 0.1) out.push({ u0, u1, z0: k.z0, z1: k.z1, type: k.type, face: k.face });
+            });
+            return out;
+        };
+        // a straight wall from A along t, n = across it (towards nin), u = along it. faces: [[n, side texture, +1 looks towards nin / -1 away]]
+        function slantWall(A, t, ops, ua, ub, n0, n1, faces, ctype, caps, portalsToo) {
+            const nin = [-t[1], t[0]], Q = (u, n, z) => [A[0] + t[0] * u + nin[0] * n, A[1] + t[1] * u + nin[1] * n, z], yaw = Math.atan2(t[1], t[0]);
+            const face = (n, tex, sd, u0, u1, z0, z1) => { if (sd > 0) emitQuad('wall', 'int', tex, false, Q(u1, n, z0), Q(u0, n, z0), Q(u0, n, z1), Q(u1, n, z1)); else emitQuad('wall', 'int', tex, false, Q(u0, n, z0), Q(u1, n, z0), Q(u1, n, z1), Q(u0, n, z1)); };
+            const jamb = (u, sd, z0, z1) => { if (sd > 0) emitQuad('wall', 'int', D.trim, false, Q(u, n0, z0), Q(u, n1, z0), Q(u, n1, z1), Q(u, n0, z1)); else emitQuad('wall', 'int', D.trim, false, Q(u, n0, z0), Q(u, n0, z1), Q(u, n1, z1), Q(u, n1, z0)); };
+            const flat = (z, sd, u0, u1) => { if (sd > 0) emitQuad('wall', 'int', D.trim, false, Q(u0, n0, z), Q(u1, n0, z), Q(u1, n1, z), Q(u0, n1, z)); else emitQuad('wall', 'int', D.trim, false, Q(u0, n0, z), Q(u0, n1, z), Q(u1, n1, z), Q(u1, n0, z)); };
+            const piece = (u0, u1, z0, z1) => {
+                if (u1 - u0 < 1e-4 || z1 - z0 < 1e-4) return;
+                if (!skin) faces.forEach(f => face(f[0], f[1], f[2], u0, u1, z0, z1));
+                const um = (u0 + u1) / 2, nm = (n0 + n1) / 2, c = Q(um, nm, 0);
+                cboxO(c[0], c[1], z0, z1, (u1 - u0) / 2 + 0.01, Math.max(0.025, (n1 - n0) / 2), yaw, ctype, 0);
+            };
+            if (caps && !skin) { jamb(ua, -1, 0, H); jamb(ub, 1, 0, H); }
+            let cur = ua;
+            ops.sort((a, b) => a.u0 - b.u0).forEach(op => {
+                if (op.u0 < cur - 1e-6) return;
+                piece(cur, op.u0, 0, H);
+                if (op.type !== 'gap') {
+                    piece(op.u0, op.u1, op.z1, H); if (op.z0 > 1e-4) piece(op.u0, op.u1, 0, op.z0);
+                    if (!skin && (!op.face || T > 0.0005 || caps)) { jamb(op.u0, 1, op.z0, op.z1); jamb(op.u1, -1, op.z0, op.z1); flat(op.z1, -1, op.u0, op.u1); if (op.z0 > 1e-4) flat(op.z0, 1, op.u0, op.u1); }
+                    if (exportMode && portalsToo) {
+                        const spec = OPEN[op.type] || OPEN.window, wm = (n0 + n1) / 2;
+                        portals.push({ flags: spec.portal, corners: [].concat(Q(op.u0, wm, op.z0), Q(op.u1, wm, op.z0), Q(op.u1, wm, op.z1), Q(op.u0, wm, op.z1)) });         // (its normal looks out of the room)
+                    }
+                }
+                cur = op.u1;
+            });
+            piece(cur, ub, 0, H);
+        }
+        polys.forEach((pg, pi) => {
+            const p = pg.pts, ftex = pg.tex || D.floor, wtex = pg.wtex || D.wallInt, ft = TEX.colType(ftex);
+            triangulate(p).forEach(tr => {
+                const a = p[tr[0]], b = p[tr[1]], c = p[tr[2]];
+                emitTri('floor', 'int', ftex, [a[0], a[1], 0], [b[0], b[1], 0], [c[0], c[1], 0]);
+                emitTri('roof', 'int', D.ceiling, [a[0], a[1], H], [c[0], c[1], H], [b[0], b[1], H]);
+                cprism([a, b, c], -0.35, 0, ft, 1); cprism([a, b, c], H, H + 0.1, 101, 0);
+            });
+            const inner = T > 0.0005 ? inset(p, T) : p, n = p.length;
+            const E = p.map((A, i) => {
+                const B = p[(i + 1) % n], L = Math.hypot(B[0] - A[0], B[1] - A[1]), t = [(B[0] - A[0]) / L, (B[1] - A[1]) / L];
+                // where another room lies behind this wall, the rooms are one: no wall there
+                return { A, L, t, behind: (u) => { const uu = Math.min(L - 0.02, Math.max(0.02, u)), x = A[0] + t[0] * uu + t[1] * 0.08, y = A[1] + t[1] * uu - t[0] * 0.08; return inGrid(x, y) || inPolyAny(x, y, pi); } };
+            });
+            E.forEach((e, i) => {
+                const j = (i + 1) % n, A = e.A, L = e.L, t = e.t, behind = e.behind; if (L < 0.02) return;
+                const along = (P) => (P[0] - A[0]) * t[0] + (P[1] - A[1]) * t[1], pe = E[(i + n - 1) % n], ne = E[j];
+                // next to an open corner (the wall before or after is open there) the face runs on past the corner, to meet the other room's wall
+                const ua = pe.behind(pe.L - 0.03) ? -T : along(inner[i]), ub = ne.behind(0.03) ? L + T : along(inner[j]);
+                const ops = lineOps(A, t, ua, ub, Math.max(T, outD) + 0.03).concat(runs(ua, ub, behind).map(r => ({ u0: r[0], u1: r[1], z0: 0, z1: H, type: 'gap' })));
+                slantWall(A, t, ops, ua, ub, Math.min(-outD, T - 0.05), T, [[T, wtex, 1]], TEX.colType(wtex), false, true);
+            });
+        });
+        (S.aparts || []).forEach(pt => {
+            const A = pt.a, B = pt.b, L = Math.hypot(B[0] - A[0], B[1] - A[1]); if (!A || !B || L < 0.2) return;
+            const t = [(B[0] - A[0]) / L, (B[1] - A[1]) / L], tex = pt.texA || D.wallInt, texB = pt.texB || D.wallInt;
+            const ops = lineOps(A, t, 0, L, PT / 2 + 0.03).concat((pt.open || []).map(o => ({ u0: Math.max(0, o.u0), u1: Math.min(L, o.u1), z0: o.z0, z1: o.z1, type: o.type || 'door' })));
+            slantWall(A, t, ops, 0, L, -PT / 2, PT / 2, [[PT / 2, texB, 1], [-PT / 2, tex, -1]], TEX.colType(tex), true, false);
+        });
+
         // ---------------- openings cut out of the model's faces: glass in windows, a frame around windows and doors ----------------
         // An oriented box of a frame: u = ua..ub across the opening (from its centre), z = za..zb, bd deep, centred dn along the outward normal.
         const frameBar = (k, dn, bd, ua, ub, za, zb) => {
@@ -335,11 +504,10 @@ window.MLO = window.MLO || {};
             emitQuad('wall', 'int', T, false, P(-1, -1, zb), P(1, -1, zb), P(1, 1, zb), P(-1, 1, zb));    // top
             emitQuad('wall', 'int', T, false, P(-1, -1, za), P(-1, 1, za), P(1, 1, za), P(1, -1, za));    // bottom
         };
-        // collision of a box like that, where the opening is near square to the grid (the collision boxes are axis aligned)
+        // collision of a box like that (turned like the opening, at any angle)
         const frameCol = (k, dn, bd, ua, ub, za, zb, type) => {
-            const q = (((k.yaw * 180 / Math.PI) % 360) + 360) % 360, r90 = q % 90; if (Math.min(r90, 90 - r90) > 6) return;
-            const horiz = Math.round(q / 90) % 2 === 0, c = Math.cos(k.yaw), s = Math.sin(k.yaw), sg = (horiz ? c : s) < 0 ? -1 : 1, u0 = Math.min(sg * ua, sg * ub), u1 = Math.max(sg * ua, sg * ub);
-            if (horiz) { const cn = k.cy + c * dn; cbox(k.cx + u0, cn - bd / 2, za, k.cx + u1, cn + bd / 2, zb, type, 0); } else { const cn = k.cx - s * dn; cbox(cn - bd / 2, k.cy + u0, za, cn + bd / 2, k.cy + u1, zb, type, 0); }
+            const ux = Math.cos(k.yaw), uy = Math.sin(k.yaw), uc = (ua + ub) / 2;
+            cboxO(k.cx + uc * ux - dn * uy, k.cy + uc * uy + dn * ux, za, zb, Math.abs(ub - ua) / 2, bd / 2, k.yaw, type, 0);
         };
         (((project.import && project.import.cutters) || []).concat(fitCut)).forEach(k => {
             if (!k.face) return;
@@ -439,6 +607,15 @@ window.MLO = window.MLO || {};
                     lights.push({ x: best[0], y: best[1], z: H - 0.15 });
                 }
             });
+            // angled rooms: one per ~3.5 m on a grid square to their longest wall
+            polys.forEach(pg => {
+                const p = pg.pts; let la = 0, ang = 0; p.forEach((a, i) => { const b = p[(i + 1) % p.length], l = Math.hypot(b[0] - a[0], b[1] - a[1]); if (l > la) { la = l; ang = Math.atan2(b[1] - a[1], b[0] - a[0]); } });
+                const c = Math.cos(ang), s = Math.sin(ang), loc = p.map(q => [q[0] * c + q[1] * s, -q[0] * s + q[1] * c]); let u0 = 1e9, u1 = -1e9, v0 = 1e9, v1 = -1e9;
+                loc.forEach(q => { u0 = Math.min(u0, q[0]); u1 = Math.max(u1, q[0]); v0 = Math.min(v0, q[1]); v1 = Math.max(v1, q[1]); });
+                const nu = Math.max(1, Math.round((u1 - u0) / 3.5)), nv = Math.max(1, Math.round((v1 - v0) / 3.5)); let n = 0;
+                for (let a = 0; a < nu; a++) for (let b = 0; b < nv; b++) { const u = u0 + (a + 0.5) * (u1 - u0) / nu, v = v0 + (b + 0.5) * (v1 - v0) / nv, x = u * c - v * s, y = u * s + v * c; if (inPoly(p, x, y)) { lights.push({ x, y, z: H - 0.15 }); n++; } }
+                if (!n) { const tr = triangulate(p)[0]; if (tr) lights.push({ x: (p[tr[0]][0] + p[tr[1]][0] + p[tr[2]][0]) / 3, y: (p[tr[0]][1] + p[tr[1]][1] + p[tr[2]][1]) / 3, z: H - 0.15 }); }
+            });
         }
         if (exportMode) (S.lights || []).forEach(l => lights.push({ x: l.x, y: l.y, z: H - 0.15 }));
 
@@ -449,7 +626,14 @@ window.MLO = window.MLO || {};
     }
 
     // the final region as a few rectangles (used to tell the patcher where the walkable interior is)
+    // (with the angled rooms as thin square-to-the-grid strips, for what only understands rectangles)
     function regionRects(shell) {
+        const out = gridRects(shell);
+        polysOf(shell).forEach(pg => stripBoxes(pg.pts, 0, 0.1).forEach(b => out.push([b.cx - b.w / 2, b.cy - b.d / 2, b.cx + b.w / 2, b.cy + b.d / 2])));
+        return out;
+    }
+    const hasRooms = (shell) => !!shell && ((shell.ops || []).some(o => o.op === 'add') || polysOf(shell).length > 0);
+    function gridRects(shell) {
         const g = regionGrid(shell), used = [], out = [];
         for (let i = 0; i < g.nx; i++) used.push(new Array(g.ny).fill(false));
         for (let j = 0; j < g.ny; j++) for (let i = 0; i < g.nx; i++) {
@@ -462,5 +646,5 @@ window.MLO = window.MLO || {};
         return out;
     }
 
-    M.Shell = { build, regionGrid, regionRects, boundary, OPEN, uniq };
+    M.Shell = { build, regionGrid, regionRects, gridRects, roomBoxes, polyBoxes, stripBoxes, polysOf, cleanPoly, inPoly, inset, triangulate, hasRooms, boundary, OPEN, uniq };
 })(window.MLO);

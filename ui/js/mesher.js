@@ -419,6 +419,13 @@ window.MLO = window.MLO || {};
         const verts = [], tris = [];
         built.boxes.forEach(b => {
             const x0 = b[0], y0 = b[1], z0 = b[2], x1 = b[3], y1 = b[4], z1 = b[5], mi = b[6], v = verts.length / 3, o = b[7];
+            if (o && o.prism) {
+                // a three-sided prism (floor or ceiling of an angled room): corners counter-clockwise from above
+                const q = o.prism; q.forEach(p => verts.push(p[0], p[1], z0)); q.forEach(p => verts.push(p[0], p[1], z1));
+                tris.push(v + 2, v + 1, v, mi, v + 3, v + 4, v + 5, mi);
+                for (let i = 0; i < 3; i++) { const j = (i + 1) % 3; tris.push(v + i, v + j, v + 3 + j, mi, v + 3 + j, v + 3 + i, v + i, mi); }
+                return;
+            }
             if (o && o.yaw != null) {
                 // a box that is turned about Z: the same 8 corners, turned (the winding stays the same)
                 const c = Math.cos(o.yaw), s = Math.sin(o.yaw), P = (su, sn, z) => [o.cx + su * o.hu * c - sn * o.hn * s, o.cy + su * o.hu * s + sn * o.hn * c, z];

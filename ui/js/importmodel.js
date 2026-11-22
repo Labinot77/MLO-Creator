@@ -608,14 +608,15 @@ window.MLO = window.MLO || {};
     IM.edgeView = function (opts) {
         const D = IM.edgeData(); if (!D) return [];
         opts = opts || {}; const I = imp(), fk = JSON.stringify(I.frame);
-        const ck = D.key + '|' + (opts.holesOnly ? 1 : 0) + (opts.outlines ? 1 : 0) + '|' + fk + '|' + I.cutters.length + '|' + JSON.stringify(S.project.shell.ops) + '|' + S.project.settings.ceilH;
+        const ck = D.key + '|' + (opts.holesOnly ? 1 : 0) + (opts.outlines ? 1 : 0) + '|' + fk + '|' + I.cutters.length + '|' + JSON.stringify([S.project.shell.ops, S.project.shell.polys]) + '|' + S.project.settings.ceilH;
         if (viewCache && viewCache.key === ck) return viewCache.list;
         const faceCut = I.cutters.filter(k => k.face), H = S.project.settings.ceilH || 2.45, ops = S.project.shell.ops.filter(o => o.op === 'add');
         const onOutline = (mid) => faceCut.some(k => {
             const cs = Math.cos(k.yaw), sn = Math.sin(k.yaw), dx = mid[0] - k.cx, dy = mid[1] - k.cy, u = dx * cs + dy * sn, n = -dx * sn + dy * cs, z = mid[2] - k.zb;
             return Math.abs(u) <= k.w / 2 + 0.1 && z >= -0.1 && z <= k.h + 0.1 && n >= -0.4 && n <= 0.15;
         });
-        const nearRooms = (mid) => mid[2] > -0.3 && mid[2] < H + 0.5 && ops.some(o => mid[0] > o.r[0] - 1.5 && mid[0] < o.r[2] + 1.5 && mid[1] > o.r[1] - 1.5 && mid[1] < o.r[3] + 1.5);
+        const pbs = M.Shell.polysOf(S.project.shell).map(pg => { const xs = pg.pts.map(q => q[0]), ys = pg.pts.map(q => q[1]); return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]; });
+        const nearRooms = (mid) => mid[2] > -0.3 && mid[2] < H + 0.5 && (ops.some(o => mid[0] > o.r[0] - 1.5 && mid[0] < o.r[2] + 1.5 && mid[1] > o.r[1] - 1.5 && mid[1] < o.r[3] + 1.5) || pbs.some(r => mid[0] > r[0] - 1.5 && mid[0] < r[2] + 1.5 && mid[1] > r[1] - 1.5 && mid[1] < r[3] + 1.5));
         const list = [];
         for (const e of D.open) {
             if (opts.holesOnly && !e.hole) continue;
@@ -695,9 +696,9 @@ window.MLO = window.MLO || {};
     // the floor up to the ceiling) is cut out of that collision, like a cutter that only works on collision. What is outside the room edge stays, the floor stays, and
     // the interior's own wall collision stands at the room edge. Switched off with import.clearCollision = false. Same shape as a cutter, in the grid's frame.
     IM.roomVolumes = function (force) {
-        const P = S.project, I = P.import; if (!I || (I.clearCollision === false && !force) || !P.shell.ops.length) return [];
+        const P = S.project, I = P.import; if (!I || (I.clearCollision === false && !force) || !M.Shell.hasRooms(P.shell)) return [];
         const H = P.settings.ceilH || 2.45, z0 = 0.02, r4 = (v) => Math.round(v * 10000) / 10000;
-        return M.Shell.regionRects(P.shell).map((r, i) => ({ id: 'room' + i, type: 'room', mesh: false, cx: r4((r[0] + r[2]) / 2), cy: r4((r[1] + r[3]) / 2), zb: z0, w: r4(r[2] - r[0]), h: r4(H - z0), d: r4(r[3] - r[1]), yaw: 0 }));
+        return M.Shell.roomBoxes(P.shell).map((r, i) => ({ id: 'room' + i, type: 'room', mesh: false, cx: r4(r.cx), cy: r4(r.cy), zb: z0, w: r4(r.w), h: r4(H - z0), d: r4(r.d), yaw: r4(r.yaw) }));
     };
 
     // ---------- several buildings: the model is cut by the openings of ALL of them ----------
@@ -724,9 +725,9 @@ window.MLO = window.MLO || {};
     IM.allRoomVolumes = function (force) {
         const out = [];
         Model.bldAll(S.project).forEach(b => {
-            const d = b.d, I = d.import; if ((I.clearCollision === false && !force) || !d.shell.ops.length) return;
+            const d = b.d, I = d.import; if ((I.clearCollision === false && !force) || !M.Shell.hasRooms(d.shell)) return;
             const f = I.frame, h = (f.heading || 0) * Math.PI / 180, c = Math.cos(h), s = Math.sin(h), H = d.settings.ceilH || 2.45, z0 = 0.02;
-            M.Shell.regionRects(d.shell).forEach((r, i) => { const sx = (r[0] + r[2]) / 2, sy = (r[1] + r[3]) / 2; out.push({ id: b.id + 'room' + i, type: 'room', mesh: false, cx: q4(f.x + sx * c - sy * s), cy: q4(f.y + sx * s + sy * c), zb: q4(f.z + z0), w: q4(r[2] - r[0]), h: q4(H - z0), d: q4(r[3] - r[1]), yaw: h }); });
+            M.Shell.roomBoxes(d.shell).forEach((r, i) => { out.push({ id: b.id + 'room' + i, type: 'room', mesh: false, cx: q4(f.x + r.cx * c - r.cy * s), cy: q4(f.y + r.cx * s + r.cy * c), zb: q4(f.z + z0), w: q4(r.w), h: q4(H - z0), d: q4(r.d), yaw: h + r.yaw }); });
         });
         return out;
     };
@@ -746,13 +747,13 @@ window.MLO = window.MLO || {};
     IM.allClearVolumes = function (extra) {
         const out = [], mg = IM.clearMargin();
         Model.bldAll(S.project).forEach(b => {
-            const d = b.d, I = d.import; if (!d.shell.ops.length) return;
+            const d = b.d, I = d.import; if (!M.Shell.hasRooms(d.shell)) return;
             const f = I.frame, h = (f.heading || 0) * Math.PI / 180, c = Math.cos(h), s = Math.sin(h), H = d.settings.ceilH || 2.45, g = M.Shell.regionGrid(d.shell);
             const inReg = (x, y) => { for (let i = 0; i < g.nx; i++) if (x >= g.X[i] && x < g.X[i + 1]) { for (let j = 0; j < g.ny; j++) if (y >= g.Y[j] && y < g.Y[j + 1]) return g.mask[i][j]; } return false; };
             // The room starts at the inner face of its wall, which is the wall thickness inside the room's edge: the parts of the model that lie in the thickness of the wall
             // (the window frames and boxes behind the siding, which the wall hides) stay, only what pokes past the wall's face into the room is cut.
             const T = Math.max(0, Math.min(0.5, +d.settings.wallThick || 0)), ins = mg + T + (extra || 0), zb = -0.3, top = H - mg;
-            M.Shell.regionRects(d.shell).forEach((r, i) => {
+            M.Shell.gridRects(d.shell).forEach((r, i) => {
                 // a side that has another part of the room next to it stays where it is (2 mm over, so no seam is left); a side that is the room's edge moves in
                 const nb = (x0, y0, x1, y1) => { let n = 0; for (const q of [0.25, 0.5, 0.75]) if (inReg(x0 + (x1 - x0) * q, y0 + (y1 - y0) * q)) n++; return n >= 2; };
                 const w = nb(r[0] - 0.005, r[1], r[0] - 0.005, r[3]), e = nb(r[2] + 0.005, r[1], r[2] + 0.005, r[3]), so = nb(r[0], r[1] - 0.005, r[2], r[1] - 0.005), no = nb(r[0], r[3] + 0.005, r[2], r[3] + 0.005);
@@ -760,6 +761,10 @@ window.MLO = window.MLO || {};
                 if (x1 - x0 < 0.05 || y1 - y0 < 0.05 || top - zb < 0.1) return;
                 const sx = (x0 + x1) / 2, sy = (y0 + y1) / 2;
                 out.push({ id: b.id + 'clr' + i, type: 'clear', cx: q4(f.x + sx * c - sy * s), cy: q4(f.y + sx * s + sy * c), zb: q4(f.z + zb), w: q4(x1 - x0), h: q4(top - zb), d: q4(y1 - y0), yaw: h });
+            });
+            // angled rooms: their edges moved in the same way, as turned strips
+            M.Shell.polysOf(d.shell).forEach((pg, pi) => {
+                const p = M.Shell.inset(pg.pts, ins); M.Shell.polyBoxes(p).forEach((r, i) => out.push({ id: b.id + 'clp' + pi + '_' + i, type: 'clear', cx: q4(f.x + r.cx * c - r.cy * s), cy: q4(f.y + r.cx * s + r.cy * c), zb: q4(f.z + zb), w: q4(r.w), h: q4(top - zb), d: q4(r.d), yaw: h + r.yaw }));
             });
         });
         return out;
@@ -875,7 +880,7 @@ window.MLO = window.MLO || {};
     // the pieces worth picking: within 12 m of a room (to the sides) and from 1 m under the floor to 2 m over the ceiling, and not deleted
     IM.colRegion = function () {
         const cp = IM.colShell(); if (!cp) return []; const P = S.project, I = P.import, H = P.settings.ceilH || 2.45;
-        const key = JSON.stringify([P.shell.ops, H, (I.colDeletes || []).length]); if (cp.region && cp.regionKey === key) return cp.region;
+        const key = JSON.stringify([P.shell.ops, P.shell.polys, H, (I.colDeletes || []).length]); if (cp.region && cp.regionKey === key) return cp.region;
         const rects = M.Shell.regionRects(P.shell), del = IM.colDelSet(), out = [];
         for (let i = 0; i < cp.n; i++) {
             const x = cp.ctr[i * 3], y = cp.ctr[i * 3 + 1], z = cp.ctr[i * 3 + 2]; if (z < -1 || z > H + 2) continue;
@@ -1129,6 +1134,27 @@ window.MLO = window.MLO || {};
         return (IM.lines = { xs: pick(xs), ys: pick(ys) });
     };
 
+    // ---------- the model's walls that are NOT square to the grid, as lines on the floor (angled rooms snap to them) ----------
+    // Upright faces of at least 0.1 m2 are merged by their line (direction to 1 degree, offset to 1 cm); each line keeps the stretch its faces cover.
+    IM.slantLines = function () {
+        IM.snapLines(); if (IM.lines.slant) return IM.lines.slant;
+        const by = new Map();
+        for (const tb of IM.tgt || []) {
+            const p = tb.pos, ix = tb.idx;
+            for (let t = 0; t + 2 < ix.length; t += 3) {
+                const a = ix[t] * 3, b = ix[t + 1] * 3, c = ix[t + 2] * 3, e1 = [p[b] - p[a], p[b + 1] - p[a + 1], p[b + 2] - p[a + 2]], e2 = [p[c] - p[a], p[c + 1] - p[a + 1], p[c + 2] - p[a + 2]];
+                const n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]], l = Math.hypot(n[0], n[1], n[2]); if (l < 0.2) continue;
+                const nx = n[0] / l, ny = n[1] / l, nh = Math.hypot(nx, ny); if (nh < 0.96 || Math.abs(nx) > 0.995 * nh || Math.abs(ny) > 0.995 * nh) continue;
+                let ang = Math.atan2(nx, -ny); if (ang < 0) ang += Math.PI; if (ang >= Math.PI - 1e-9) ang -= Math.PI;          // the line's direction, 0..180 degrees
+                const dx = Math.cos(ang), dy = Math.sin(ang), off = -p[a] * dy + p[a + 1] * dx, key = Math.round(ang * 180 / Math.PI) + ':' + Math.round(off * 100);
+                let lo = 1e9, hi = -1e9; [a, b, c].forEach(i => { const u = p[i] * dx + p[i + 1] * dy; lo = Math.min(lo, u); hi = Math.max(hi, u); });
+                if (Math.abs(lo) > 80 || Math.abs(hi) > 80) continue;
+                const g = by.get(key); if (g) { g.lo = Math.min(g.lo, lo); g.hi = Math.max(g.hi, hi); g.area += l / 2; } else by.set(key, { ang, off, lo, hi, area: l / 2 });
+            }
+        }
+        const out = []; by.forEach(g => { if (g.area < 0.3) return; const dx = Math.cos(g.ang), dy = Math.sin(g.ang), P = (u) => [u * dx - g.off * dy, u * dy + g.off * dx]; out.push({ a: P(g.lo), b: P(g.hi), ang: g.ang }); });
+        return (IM.lines.slant = out);
+    };
     // ---------- corners of the model's walls (an x-facing and a y-facing wall meet there), so room corners snap to them ----------
     IM.wallCorners = function () {
         if (IM.lines && IM.lines.corners) return IM.lines.corners;

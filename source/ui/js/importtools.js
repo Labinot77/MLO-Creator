@@ -249,7 +249,7 @@ window.MLO = window.MLO || {};
         if (M.FitModels.dragging()) { M.FitModels.move(e); return; }
         if (rd) { roomMove(e); return; }
         if (lvl) { levelMove(e); return; }
-        if (!drag) { if (S.shellTool === 'room' || S.shellTool === 'cut' || S.shellTool === 'part' || S.shellTool === 'floor' || S.shellTool === 'paint') SH.move(e); return; }
+        if (!drag) { if (S.shellTool === 'room' || S.shellTool === 'cut' || S.shellTool === 'part' || S.shellTool === 'poly' || S.shellTool === 'floor' || S.shellTool === 'paint' || S.shellTool === 'select' || SH.busy()) SH.move(e); return; }
         const k = drag.k0, cs = Math.cos(k.yaw), sn = Math.sin(k.yaw), n = [-sn, cs], ray = hover.ray;
         const dn = ray.d[0] * n[0] + ray.d[1] * n[1]; if (Math.abs(dn) < 0.04) return;
         const t = ((k.cx - ray.o[0]) * n[0] + (k.cy - ray.o[1]) * n[1]) / dn; if (t < 0) return;
@@ -271,7 +271,7 @@ window.MLO = window.MLO || {};
             if (d.moved) { const k0 = d.k0, cs = Math.cos(k0.yaw), sn = Math.sin(k0.yaw); updateCutter(d.id, k => { k.cx = r3(k0.cx + cs * d.du); k.cy = r3(k0.cy + sn * d.du); k.zb = Math.max(-0.5, r3(k0.zb + d.dz)); }); }
             bus.emit('cutsel'); return;
         }
-        if (S.shellTool === 'room' || S.shellTool === 'cut' || S.shellTool === 'part' || S.shellTool === 'floor') SH.up(e);
+        if (S.shellTool === 'room' || S.shellTool === 'cut' || S.shellTool === 'part' || S.shellTool === 'floor' || SH.busy()) SH.up(e);
     }
 
     // ---------- the scale figure (Scale figure tool): click to stand it somewhere, drag it, R turns it ----------
@@ -901,7 +901,12 @@ window.MLO = window.MLO || {};
     // what the game will collide with in the interior: what the rooms make by themselves (teal outlines) and your boxes (their material's colour, shown filled)
     function drawCBoxes(R, active) {
         const gen = (M.App.built && M.App.built.boxes) || [];
-        gen.forEach(b => { if (b[7] && b[7].user) return; obEdges(R, [(b[0] + b[3]) / 2, (b[1] + b[4]) / 2, (b[2] + b[5]) / 2], (b[3] - b[0]) / 2, (b[4] - b[1]) / 2, (b[5] - b[2]) / 2, 0, GEN_COL); });
+        gen.forEach(b => {
+            const o = b[7]; if (o && o.user) return;
+            if (o && o.prism) { const q = o.prism; for (let i = 0; i < 3; i++) { const a = q[i], c = q[(i + 1) % 3]; R.ovTopLine([a[0], a[1], b[2]], [c[0], c[1], b[2]], GEN_COL); R.ovTopLine([a[0], a[1], b[5]], [c[0], c[1], b[5]], GEN_COL); } return; }
+            if (o && o.yaw != null) { obEdges(R, [o.cx, o.cy, (b[2] + b[5]) / 2], o.hu, o.hn, (b[5] - b[2]) / 2, o.yaw, GEN_COL); return; }
+            obEdges(R, [(b[0] + b[3]) / 2, (b[1] + b[4]) / 2, (b[2] + b[5]) / 2], (b[3] - b[0]) / 2, (b[4] - b[1]) / 2, (b[5] - b[2]) / 2, 0, GEN_COL);
+        });
         cbLive();
         cbList().forEach(b => {
             const m = M.COLMATS.get(b.mat), sel = cbsel.has(b.id), hov = active && !cbd && hover && hover.cb && hover.cb.b.id === b.id, c = [b.cx, b.cy, b.zb + b.h / 2];
@@ -1093,7 +1098,7 @@ window.MLO = window.MLO || {};
         } else if (t === 'plants') {
             const r = M.Plants.tool.draw(R); if (r) { text = r.text; at = r.at; }
         }
-        if (t === 'room' || t === 'cut' || t === 'part' || t === 'floor' || t === 'select' || t === 'eraser' || t === 'paint') SH.draw(R, label);
+        if (t === 'room' || t === 'cut' || t === 'part' || t === 'poly' || t === 'floor' || t === 'select' || t === 'eraser' || t === 'paint') SH.draw(R, label);
         else label(text, at);
         if (t === 'select') drawRoomSel(R); else M.App.canvas.style.cursor = t === 'cbox' ? cbCursor() : '';
     }

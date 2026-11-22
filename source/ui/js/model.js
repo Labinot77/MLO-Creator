@@ -30,7 +30,7 @@ window.MLO = window.MLO || {};
     const defaultsFor = () => ({ wallExt: 'brick_red', wallInt: 'plaster_cream', floor: 'photo_oak_grey', ceiling: 'plaster_white', roof: 'roof_slate', trim: 'trim_white', slab: 'concrete', stair: 'wood_oak' });
     const randId = () => Math.random().toString(36).slice(2, 5);
 
-    const newShell = () => ({ ops: [], openings: [], parts: [], floors: [], lights: [], cands: [] });
+    const newShell = () => ({ ops: [], openings: [], parts: [], floors: [], lights: [], cands: [], polys: [], aparts: [] });
 
     // ---- buildings: one project holds several interiors, one per building of the model ----
     // The live fields of the project (import.frame / building / iso / cutters / cboxes / clearCollision, shell, the ceiling and wall settings, defaults = the textures) belong to
