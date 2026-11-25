@@ -24,6 +24,7 @@ namespace MloCreator
             public double Grid = 0.25, Distance = 1.5, Strength = 0.7, Natural = 0.55, NaturalMin = 0.12, Artificial = 0.85, Min = 0.3, Door = 0.55, PortalReach = 1.0;
             public int Rays = 32, ShadowLights = 8;
             public bool InteriorOnly = true;
+            public double Grime = 0, FloorZ = 0;                 // the project's abandoned look: dirt low on the walls and in patches; where its floor is
         }
 
         static AmbientSettings LoadAmbientSettings()
@@ -54,6 +55,21 @@ namespace MloCreator
         }
 
         static double Clamp(double v, double lo, double hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+        // smooth value noise, 0..1, about one unit across
+        static double SmoothNoise(double x, double y, double z)
+        {
+            int xi = (int)Math.Floor(x), yi = (int)Math.Floor(y), zi = (int)Math.Floor(z); double fx = x - xi, fy = y - yi, fz = z - zi;
+            fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy); fz = fz * fz * (3 - 2 * fz);
+            double r = 0;
+            for (int c = 0; c < 8; c++)
+            {
+                int dx = c & 1, dy = (c >> 1) & 1, dz = (c >> 2) & 1;
+                uint h = (uint)((xi + dx) * 374761393 + (yi + dy) * 668265263 + (zi + dz) * 1274126177); h = (h ^ (h >> 13)) * 1274126177; h ^= h >> 16;
+                r += (h & 0xFFFFFF) / (double)0x1000000 * (dx == 1 ? fx : 1 - fx) * (dy == 1 ? fy : 1 - fy) * (dz == 1 ? fz : 1 - fz);
+            }
+            return r;
+        }
 
         // A window or door the sky light comes in through: its middle, the way it looks out (unit), its area.
         class SkyHole { public V3 C, N; public double A; }
@@ -89,9 +105,18 @@ namespace MloCreator
 
         // Interior parts and door props get traced shading with the sky light from the portals; the lights get the game's interior flags.
         // doorAt: where each door prop stands in the interior (its geometry is relative to that point).
-        static void BakeAmbient(List<GroupData> groups, List<GroupData> doors, List<V3> doorAt, List<PortalData> portals, List<string> log)
+        static void BakeAmbient(List<GroupData> groups, List<GroupData> doors, List<V3> doorAt, List<PortalData> portals, Dictionary<string, object> atmos, List<string> log)
         {
             AmbientSettings s = LoadAmbientSettings();
+            if (atmos != null)
+            {
+                // the project's own look: brightness scales both channels, grime deepens the corners and darkens low down and in patches
+                double bright = Clamp(J.D(J.G(atmos, "brightness"), 1), 0.2, 2.5);
+                s.Natural = Clamp(s.Natural * bright, 0, 1); s.NaturalMin = Clamp(s.NaturalMin * bright, 0, 1); s.Artificial = Clamp(s.Artificial * bright, 0, 1);
+                s.Grime = Clamp(J.D(J.G(atmos, "grime"), 0), 0, 1); s.FloorZ = J.D(J.G(atmos, "floor"), 0);
+                s.Strength = Clamp(s.Strength + 0.25 * s.Grime, 0, 0.95);
+                log.Add("ambient: brightness " + bright + ", grime " + s.Grime);
+            }
             List<float[]> tris = BakeInterior(groups, portals, s, log);
             LightFlags(groups, s, log);
             if (!s.Enabled) return;
@@ -109,15 +134,16 @@ namespace MloCreator
         // the lights: interior-only (no light through the walls to the outside) and the first few cast shadows, as in the game's interiors
         static void LightFlags(List<GroupData> groups, AmbientSettings s, List<string> log)
         {
-            int n = 0, shadows = 0;
+            int n = 0, shadows = 0, buzz = 0;
             foreach (GroupData g in groups)
                 foreach (LightData l in g.Lights)
                 {
                     int f = s.InteriorOnly ? 1 : 0;
                     if (n < s.ShadowLights) { f |= 64 | 128 | 256; shadows++; }          // CAST_SHADOWS, CAST_STATIC_GEOM_SHADOWS, CAST_DYNAMIC_GEOM_SHADOWS
+                    if (l.Buzz) { f |= 1024 | 2048; buzz++; }                              // ENABLE_BUZZING, FORCE_BUZZING: a failing tube that flickers
                     l.Flags = f; n++;
                 }
-            if (n > 0) log.Add("lights: " + n + (s.InteriorOnly ? " interior-only" : "") + ", " + shadows + " cast shadows");
+            if (n > 0) log.Add("lights: " + n + (s.InteriorOnly ? " interior-only" : "") + ", " + shadows + " cast shadows" + (buzz > 0 ? ", " + buzz + " flicker" : ""));
         }
 
         static List<float[]> BakeInterior(List<GroupData> groups, List<PortalData> portals, AmbientSettings s, List<string> log)
@@ -282,6 +308,12 @@ namespace MloCreator
                     if (hit < reach) occ += 1 - hit / reach;
                 }
                 double light = Math.Max(s.Min, 1 - s.Strength * occ / dirs.Length);
+                if (s.Grime > 0)
+                {
+                    // grime: darker in the half metre above the floor and in soft patches about a metre across (the same place always gets the same dirt)
+                    double low = 1 - Clamp((p.Z - s.FloorZ) / 0.9, 0, 1), patch = SmoothNoise(p.X * 0.9, p.Y * 0.9, p.Z * 0.9);
+                    light *= 1 - s.Grime * (0.35 * low * low + 0.3 * Math.Max(0, patch - 0.45) / 0.55);
+                }
                 double sky = holes != null && holes.Count > 0 ? SkyAt(p, n, holes, s.PortalReach) : (door ? s.Door / Math.Max(1e-3, s.Natural) : 1);
                 double nat = holes != null && holes.Count > 0 ? s.NaturalMin + (s.Natural - s.NaturalMin) * sky : s.Natural * Math.Min(1, sky);
                 col[v * 4] = (byte)Math.Round(255 * Clamp(nat * light, 0, 1));

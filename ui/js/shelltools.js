@@ -7,7 +7,7 @@ window.MLO = window.MLO || {};
     const SNAP = 0.05, LINE_SNAP = 0.09, CORNER_SNAP = 0.3;
     const randId = () => Math.random().toString(36).slice(2, 7);
 
-    let hover = null, drag = null, poly = null, pd = null;
+    let hover = null, drag = null, poly = null, pd = null, fd = null;
     const r4 = (v) => Math.round(v * 10000) / 10000;
     const camTol = () => Math.max(0.12, ((M.App.renderer && M.App.renderer.camera.dist) || 20) * 0.012);
     const isImp = () => S.project.kind === 'import' && M.ImportModel;
@@ -168,6 +168,55 @@ window.MLO = window.MLO || {};
         return best;
     }
 
+    // ---------------- floor height points (tool 'flz') ----------------
+    const flPts = () => ((shell().floorH && shell().floorH.pts) || []);
+    const flNew = () => (S.flzNew = S.flzNew || { z: 0, r: 1, slope: 1.5, shape: 'round' });
+    function flAt(x, y) { const tol = Math.max(0.25, camTol()); let best = null, bd = tol; flPts().forEach(p => { const d = Math.hypot(p.x - x, p.y - y); if (d < bd) { bd = d; best = p; } }); return best; }
+    function flGround(e) { const ray = api().pointerRay(e), ph = api().planeHit(ray, Shell.floorCfg(shell()).base); return ph ? { x: ph.x, y: ph.y, ray } : null; }
+    function flDown(e) {
+        const g = flGround(e); if (!g) return;
+        // picking a height off the building (a door's threshold): the next click on the model
+        if (S.flzPick && S.project.kind === 'import' && M.ImportModel) {
+            const h = M.ImportModel.pick(g.ray), what = S.flzPick; S.flzPick = null;
+            if (!h) { toast('Nothing of the model under the pointer. Click its floor or a door step.', 'warn'); bus.emit('tooloptions'); return; }
+            const z = Math.round(h.p[2] * 1000) / 1000;
+            if (what === 'base') { Model.edit(P => { P.shell.floorH = Object.assign({ base: 0, pts: [] }, P.shell.floorH, { base: z }); }); toast('Floor raised to ' + z.toFixed(3) + ' m (the height you clicked).', 'ok'); }
+            else if (what === 'new') { flNew().z = z; toast('New points get ' + z.toFixed(3) + ' m.', 'ok'); }
+            else Model.edit(P => { const q = ((P.shell.floorH || {}).pts || []).find(p => p.id === what); if (q) q.z = z; });
+            bus.emit('tooloptions'); return;
+        }
+        const hit = flAt(g.x, g.y);
+        if (hit) { S.flzSel = hit.id; fd = { id: hit.id, x0: hit.x, y0: hit.y, p0: [g.x, g.y], px: [e.clientX, e.clientY], moved: false }; bus.emit('tooloptions'); return; }
+        const n = flNew(), id = randId(), x = Math.round(g.x / SNAP) * SNAP, y = Math.round(g.y / SNAP) * SNAP;
+        Model.edit(P => { const f = P.shell.floorH = Object.assign({ base: 0, pts: [] }, P.shell.floorH); f.pts = (f.pts || []).concat([{ id, x: r4(x), y: r4(y), z: n.z, r: n.r, ry: n.shape === 'square' ? (n.ry != null ? n.ry : n.r) : undefined, slope: n.slope, shape: n.shape }]); });
+        S.flzSel = id; bus.emit('tooloptions');
+    }
+    function flMove(e) {
+        const g = flGround(e); hover = g ? { fg: g } : null; if (!fd || !g) return;
+        if (!fd.moved && Math.hypot(e.clientX - fd.px[0], e.clientY - fd.px[1]) < 4) return; fd.moved = true;
+        const q = flPts().find(p => p.id === fd.id); if (!q) { fd = null; return; }
+        let dx = g.x - fd.p0[0], dy = g.y - fd.p0[1]; if (!e.shiftKey) { dx = Math.round(dx / SNAP) * SNAP; dy = Math.round(dy / SNAP) * SNAP; }
+        q.x = r4(fd.x0 + dx); q.y = r4(fd.y0 + dy); bus.emit('change');
+    }
+    function flUp() {
+        const k = fd; fd = null; if (!k || !k.moved) return; const q = flPts().find(p => p.id === k.id); if (!q) return; const x = q.x, y = q.y; q.x = k.x0; q.y = k.y0;
+        Model.edit(P => { const r = P.shell.floorH.pts.find(p => p.id === k.id); if (r) { r.x = x; r.y = y; } });
+    }
+    function flDraw(R) {
+        const fl = Shell.floorCfg(shell()), col = [1, 0.8, 0.3, 1], dim = [1, 0.8, 0.3, 0.4], selc = [0.45, 1, 0.6, 1];
+        // a point: its flat part (solid), where its slope ends (faint), a cross in the middle
+        const ring = (p, r, ry, z, c) => {
+            if (p.shape === 'square') { const P = [[-r, -ry], [r, -ry], [r, ry], [-r, ry]]; for (let i = 0; i < 4; i++) { const a = P[i], b = P[(i + 1) % 4]; R.ovTopLine([p.x + a[0], p.y + a[1], z], [p.x + b[0], p.y + b[1], z], c); } return; }
+            const n = 40; for (let i = 0; i < n; i++) { const a = i / n * Math.PI * 2, b = (i + 1) / n * Math.PI * 2; R.ovTopLine([p.x + Math.cos(a) * r, p.y + Math.sin(a) * r, z], [p.x + Math.cos(b) * r, p.y + Math.sin(b) * r, z], c); }
+        };
+        fl.pts.forEach(p => {
+            const sel = S.flzSel === p.id, c = sel ? selc : col, r = +p.r || 0, ry = p.ry != null ? +p.ry : r, sl = +p.slope || 0, z = +p.z + 0.03;
+            ring(p, Math.max(r, 0.02), Math.max(ry, 0.02), z, c); if (sl > 0) ring(p, r + sl, ry + sl, Shell.heightAt(shell(), p.x + r + sl, p.y) + 0.03, sel ? [0.45, 1, 0.6, 0.45] : dim);
+            const s = 0.12; R.ovTopLine([p.x - s, p.y, z], [p.x + s, p.y, z], c); R.ovTopLine([p.x, p.y - s, z], [p.x, p.y + s, z], c);
+        });
+        return fl;
+    }
+
     // ---------------- angled rooms: picking, corners ----------------
     function polyAt(x, y) { let best = null, ba = 1e18; Shell.polysOf(shell()).forEach(pg => { if (!Shell.inPoly(pg.pts, x, y)) return; let a = 0; pg.pts.forEach((q, i) => { const r = pg.pts[(i + 1) % pg.pts.length]; a += q[0] * r[1] - r[0] * q[1]; }); a = Math.abs(a); if (a < ba) { ba = a; best = pg; } }); return best; }
     function polyCorner(id, x, y) { const pg = polyById(id); if (!pg) return -1; const tol = camTol(); let bi = -1, bd = tol; pg.pts.forEach((q, i) => { const d = Math.hypot(q[0] - x, q[1] - y); if (d < bd) { bd = d; bi = i; } }); return bi; }
@@ -235,6 +284,7 @@ window.MLO = window.MLO || {};
 
     function down(e) {
         const t = S.shellTool;
+        if (t === 'flz') { flDown(e); return; }
         if (t === 'poly') {
             const rg = rawGround(e); if (!rg) return; const prev = poly && poly.pts.length ? poly.pts[poly.pts.length - 1] : null, q = snapPoint(rg.x, rg.y, prev, e.shiftKey);
             if (poly && poly.pts.length >= 3 && Math.hypot(q.x - poly.pts[0][0], q.y - poly.pts[0][1]) < Math.max(0.2, camTol())) { finishPoly(); return; }
@@ -276,6 +326,7 @@ window.MLO = window.MLO || {};
     }
 
     function move(e) {
+        if (S.shellTool === 'flz') { flMove(e); return; }
         if (S.shellTool === 'poly') { const rg = rawGround(e); const prev = poly && poly.pts.length ? poly.pts[poly.pts.length - 1] : null; hover = rg ? { pq: snapPoint(rg.x, rg.y, prev, e.shiftKey) } : null; return; }
         if (pd) { polyDragMove(e); return; }
         const g = ground(e); hover = { g, pick: g ? pick(g.ray) : null };
@@ -302,6 +353,7 @@ window.MLO = window.MLO || {};
     }
 
     function up(e) {
+        if (fd) { flUp(); return; }
         if (pd) { polyDragEnd(true); return; }
         if (!drag) return; const d = drag; drag = null;
         if (d.tool === 'room' || d.tool === 'cut') {
@@ -385,6 +437,10 @@ window.MLO = window.MLO || {};
             }
             lbl = (t === 'room' || t === 'cut' || t === 'part' || t === 'floor') ? g.x.toFixed(2) + ', ' + g.y.toFixed(2) : null; at = lbl ? [g.x, g.y, 0.7] : null;
         }
+        if (t === 'flz') {
+            const fl = flDraw(R), g = hover && hover.fg;
+            if (g) { const p = flAt(g.x, g.y); lbl = S.flzPick ? 'Click the model to take its height' : (p ? 'Point ' + (+p.z).toFixed(2) + ' m · drag to move' : 'Floor here ' + Shell.heightAt(shell(), g.x, g.y).toFixed(2) + ' m · click: new point at ' + flNew().z.toFixed(2) + ' m'); at = [g.x, g.y, fl.base + 0.6]; }
+        }
         if (t === 'select' && !pd && hover && hover.g && !(S.shellSel && S.shellSel.kind === 'poly')) { const pg = polyAt(hover.g.rx, hover.g.ry); if (pg) polyOutline(R, pg.pts, [1, 1, 1, 0.55], false); }
         label(lbl, at);
     }
@@ -400,7 +456,8 @@ window.MLO = window.MLO || {};
             if (k === 'Backspace' || k === 'Delete') { poly.pts.pop(); if (!poly.pts.length) poly = null; return true; }
         }
         if (k === 'x' && S.shellTool === 'select' && S.shellSel && (S.shellSel.kind === 'poly' || S.shellSel.kind === 'apart')) { deleteSelected(); return true; }
-        const map = { '1': 'room', '2': 'cut', '3': 'part', '4': 'door', '5': 'window', '6': 'arch', '7': 'floor', '8': 'poly', v: 'select', x: 'eraser', p: 'paint' };
+        if (S.shellTool === 'flz' && S.flzSel && (k === 'Delete' || k === 'Backspace' || k === 'x')) { const id = S.flzSel; S.flzSel = null; Model.edit(P => { P.shell.floorH.pts = P.shell.floorH.pts.filter(p => p.id !== id); }); bus.emit('tooloptions'); return true; }
+        const map = { '1': 'room', '2': 'cut', '3': 'part', '4': 'door', '5': 'window', '6': 'arch', '7': 'floor', '8': 'poly', '9': 'flz', v: 'select', x: 'eraser', p: 'paint' };
         if (map[k]) { poly = null; M.App.setTool(map[k]); return true; }
         if (k === 'Escape') { drag = null; poly = null; if (pd) polyDragEnd(false); return true; }
         if ((k === 'Delete' || k === 'Backspace') && S.shellSel) { deleteSelected(); return true; }
@@ -420,6 +477,6 @@ window.MLO = window.MLO || {};
     let labelFn = null;
     function label(text, at) { if (labelFn) labelFn(text, at); }
 
-    M.ShellTools = { down, move, up, draw, key, deleteSelected, pick, ground, openingAt, snapTo, lines, corner, wallSegs, wallPlanes, wallFaceNear, partLine, divideRect, dividePoly, polyAt, busy: () => !!pd || !!poly,
-        cancel() { drag = null; poly = null; if (pd) polyDragEnd(false); }, setLabel(f) { labelFn = f; }, get hover() { return hover; }, get dragging() { return drag ? drag.tool : (pd ? 'poly' : null); } };
+    M.ShellTools = { down, move, up, draw, key, deleteSelected, pick, ground, openingAt, snapTo, lines, corner, wallSegs, wallPlanes, wallFaceNear, partLine, divideRect, dividePoly, polyAt, busy: () => !!pd || !!poly || !!fd,
+        cancel() { drag = null; poly = null; S.flzPick = null; if (fd) { const q = flPts().find(p => p.id === fd.id); if (q) { q.x = fd.x0; q.y = fd.y0; } fd = null; bus.emit('change'); } if (pd) polyDragEnd(false); }, setLabel(f) { labelFn = f; }, get hover() { return hover; }, get dragging() { return drag ? drag.tool : (pd ? 'poly' : null); } };
 })(window.MLO);

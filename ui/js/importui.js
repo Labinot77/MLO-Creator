@@ -13,12 +13,12 @@ window.MLO = window.MLO || {};
     const encName = () => encodeURIComponent(Model.safeName(S.project.name));
     const kb = (n) => n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
 
-    const TOOLS = [['building', 'Select building', 'B'], ['frame', 'Frame', 'O'], ['level', 'Raise / lower rooms', 'G'], ['room', 'Add room', '1'], ['poly', 'Angled room', '8'], ['cut', 'Cut out', '2'], ['fill', 'Fill gaps', 'J'], ['part', 'Partition', '3'], ['door', 'Door', '4'], ['window', 'Window', '5'], ['arch', 'Archway', '6'], ['fit', 'Window / door models', 'I'], ['plants', 'Props and plants', 'Y'],
+    const TOOLS = [['building', 'Select building', 'B'], ['frame', 'Frame', 'O'], ['level', 'Raise / lower rooms', 'G'], ['room', 'Add room', '1'], ['poly', 'Angled room', '8'], ['flz', 'Floor height', '9'], ['cut', 'Cut out', '2'], ['fill', 'Fill gaps', 'J'], ['part', 'Partition', '3'], ['door', 'Door', '4'], ['window', 'Window', '5'], ['arch', 'Archway', '6'], ['fit', 'Window / door models', 'I'], ['plants', 'Props and plants', 'Y'],
         ['floor', 'Floor paint', '7'], ['light', 'Light', 'L'], ['figure', 'Scale figure', 'H'], ['faces', 'Delete faces', 'F'], ['edges', 'Edges (fill holes)', 'K'], ['parts', 'Model parts', 'P'], ['collision', 'Collision', 'M'], ['cbox', 'Collision box', 'N'], ['walk', 'Walk check', 'U'], ['select', 'Select', 'V'], ['eraser', 'Eraser', 'X']];
     // What each tool does in one line (the tool list shows it; the long text is in HELP).
     const SUM = {
         building: 'Pick one building out of the block.', frame: 'Square the grid to a wall and set the floor.', level: 'Raise or lower the rooms against the model.',
-        room: 'Draw a rectangle: floor, walls and ceiling.', poly: 'Click the corners of a room with walls at any angle (diagonal garage doors, bay walls).', cut: 'Take a rectangle out of a room (a column, a closet).', part: 'Draw a straight interior wall at any angle; it snaps to even spacing.', fill: 'Close narrow gaps between your rooms.',
+        room: 'Draw a rectangle: floor, walls and ceiling.', poly: 'Click the corners of a room with walls at any angle (diagonal garage doors, bay walls).', flz: 'Raise or lower the floor, everywhere or around points, with slopes between.', cut: 'Take a rectangle out of a room (a column, a closet).', part: 'Draw a straight interior wall at any angle; it snaps to even spacing.', fill: 'Close narrow gaps between your rooms.',
         door: 'Cut a door out of the model and put the door in.', window: 'Cut a window out of the model and put glass in.', arch: 'Cut a wide opening with a box.', fit: 'Place window and door models (.glb) by hand with a move / size / turn gizmo.', plants: 'Click props, plants and small model pieces in the view and remove them.',
         faces: 'Select faces like in Blender (click, box, A, L), then delete them: fake doors, painted windows, grilles.', parts: 'See each texture of the model and remove or restore a whole one.', collision: 'Pick pieces of the building\'s invisible collision and delete them.', cbox: 'Build your own collision: boxes with a surface type.', walk: 'Walk a player through the interior and list what blocks or leaks.', edges: 'Select the rim of a hole in the wall and fill it with faces.',
         floor: 'Paint a floor texture on part of the floor.', light: 'Hang a ceiling light.',
@@ -30,7 +30,7 @@ window.MLO = window.MLO || {};
         building: { name: 'Select building', vars: [['building', 'Select building', 'B']] },
         frame: { name: 'Grid and floor', sum: 'Square the grid to a wall and set the floor.', vars: [['frame', 'Grid and floor', 'O']] },
         level: { name: 'Raise / lower rooms', vars: [['level', 'Raise / lower rooms', 'G']] },
-        room: { name: 'Rooms', sum: 'Draw a rectangle for a room, a room with angled walls, or cut one out of a room (a column, a closet).', vars: [['room', 'Add room', '1'], ['poly', 'Angled room', '8'], ['cut', 'Cut out', '2']] },
+        room: { name: 'Rooms', sum: 'Draw a rectangle for a room, a room with angled walls, or cut one out of a room (a column, a closet).', vars: [['room', 'Add room', '1'], ['poly', 'Angled room', '8'], ['flz', 'Floor height', '9'], ['cut', 'Cut out', '2']] },
         part: { name: 'Partition', vars: [['part', 'Partition', '3']] },
         fill: { name: 'Fill gaps', vars: [['fill', 'Fill gaps', 'J']] },
         opening: { name: 'Cut an opening', sum: 'Cut a door, window or archway out of the building\'s wall and fill it.', vars: [['door', 'Door', '4'], ['window', 'Window', '5'], ['arch', 'Archway', '6']] },
@@ -64,6 +64,7 @@ window.MLO = window.MLO || {};
         frame: ['Click a flat floor of the model: sets the corner and the floor height.', 'Click a straight wall: squares the grid to it.', 'Shift+click a wall: the floor is its bottom edge. Alt+click: moves the corner (0, 0) there.'],
         level: ['Drag the blue arrow up or down until the rooms\' floor matches the building\'s floor.', 'Ctrl snaps to 5 cm, Shift moves finely, Esc cancels.', 'Or click a floor of the model to put the rooms\' floor at its height.'],
         room: ['Drag a rectangle in the building: it becomes floor, walls and ceiling.', 'Corners snap to the building\'s wall corners (yellow cross), edges to its walls and to 5 cm (Shift: no snapping).', 'Move or resize a room afterwards with the Select tool (V).'],
+        flz: ['Floor height raises the whole floor (to a door\'s step: Pick from the model, then click the step).', 'Click the floor for a height point: flat at its height out to its size, then a straight slope back to the floor around it (a ramp, a pit, a loading dock). Drag to move, Del removes.', 'Walls reach down to the lowest floor; the collision follows the slopes.'],
         poly: ['Click each corner of the room; click the first corner (or press Enter) to close it. Backspace takes the last corner back, Esc cancels.', 'Corners snap to the building\'s corners, to where two walls cross and onto its walls at any angle (diagonal ones too); between them 15° steps and 5 cm. Shift: no snapping.', 'Where it touches another room the two are one room (no wall between). Select it (V) to drag its corners or divide it evenly.'],
         cut: ['Drag a rectangle over a room: that part is taken out (a column, a closet).', 'Same snapping as Add room.'],
         part: ['Drag a straight line to build a wall inside the interior. It turns square to the grid, 45° or along a nearby wall (diagonal walls too).', 'It slides onto 1/2, 1/3, 2/3, 1/4 or 3/4 of the space between the walls beside it (the label shows it), and its ends go onto the walls. Shift: free.', 'To split a room into equal parts: select it and use Divide evenly.'],
@@ -91,6 +92,7 @@ window.MLO = window.MLO || {};
         level: 'Drag the blue arrow up or down to raise or lower all the rooms against the model, until the floor matches the building. Ctrl snaps to 5 cm, Shift moves finely, Esc or right-click cancels. Or click a floor of the model to put the rooms\' floor at that height. The cutters stay where they are on the model.',
         room: 'Drag a rectangle to add it to the interior (floor, walls, ceiling). Its edges snap to the model\'s own walls and to 5 cm.',
         cut: 'Drag a rectangle to take it out of the interior (a column, a closet).',
+        flz: 'The floor of every room is at one height (Floor height, measured from the grid floor), except around the height points. A point keeps its own height flat out to its size (round, or a rectangle for a loading bay or pit), then slopes in a straight line back to the floor around it over its slope length: that is a ramp. Where points overlap their heights are averaged. Pick from the model takes a height off the building (click a door step to put the floor level with the door). The ceiling does not move. Walls reach down to the lowest point and the floor collision follows the slopes.',
         poly: 'A room of any shape: click its corners in order, click the first one again (or press Enter) to close it. Every edge becomes a wall, at any angle, with the floor and ceiling inside. Doors and windows cut on those walls (Door, Window, Archway and placed models) open them and get portals, like on the square rooms. Where an angled room touches a square room or another angled room, the two are one room: no wall is built between them, so draw a partition there if you want one. Select it to drag its corners (they snap like when drawing), drag its inside to move it, or divide it into equal parts with partitions square to one of its walls.',
         fill: 'Green areas are gaps between your rooms (no wider than "Largest gap"). Click one to fill it as part of the interior. Shift+click a closed hole fills it whatever its size. "Fill all" fills every green area.',
         part: 'Drag a straight line to build an interior wall. The direction snaps to the grid, to 45 degrees and to the walls around it, the diagonal ones too (Shift: free). While you draw, the wall slides onto an even spacing between the parallel walls on either side (halves, thirds, quarters: the label says which) and both ends go onto the walls they reach within 40 cm, so walls are evenly placed and closed. Doors in it come from the Door tool or the opening tools.',
@@ -129,6 +131,61 @@ window.MLO = window.MLO || {};
         root.append(el('div', { class: 'row' }, el('button', { class: 'btn sm primary', onclick: () => { const n = run(st.n, st.way); toast(n ? n + ' partition' + (n === 1 ? '' : 's') + ' added: ' + st.n + ' equal parts.' : 'Nothing to divide.', n ? 'ok' : 'warn'); M.UI.renderLeft(); } }, 'Divide into ' + st.n + ' equal parts')));
     }
     UI2.divideRow = divideRow;
+    // ---------------- Floor height tool: the base height, the new point's settings, the selected point ----------------
+    function floorPanel(root) {
+        const sh = S.project.shell, fl = M.Shell.floorCfg(sh), n = S.flzNew = S.flzNew || { z: 0, r: 1, slope: 1.5, shape: 'round' }, imp = S.project.kind === 'import';
+        const setF = (fn) => Model.edit(P => { P.shell.floorH = Object.assign({ base: 0, pts: [] }, P.shell.floorH); fn(P.shell.floorH); });
+        const pickBtn = (what, label) => imp ? el('button', { class: 'btn sm' + (S.flzPick === what ? ' primary' : ''), title: 'Then click the model (a door step, the old floor): its height is taken', onclick: () => { S.flzPick = S.flzPick === what ? null : what; M.UI.renderLeft(); } }, S.flzPick === what ? 'Click the model…' : label) : null;
+        root.append(el('div', { class: 'h' }, 'Whole floor'));
+        root.append(numField('Floor height', () => f2(fl.base, 3), v => setF(f => { f.base = Math.max(-3, Math.min(3, v)); }), '0.05', 'm'));
+        root.append(el('div', { class: 'row wrap' }, ...[-0.1, -0.05, 0.05, 0.1].map(d => el('button', { class: 'btn sm', onclick: () => setF(f => { f.base = Math.round(((+f.base || 0) + d) * 1000) / 1000; }) }, (d > 0 ? '+' : '') + d)), pickBtn('base', 'Pick from the model')));
+        root.append(el('div', { class: 'note' }, 'Above the grid floor (0). Click a door\'s step with Pick to make the floor level with the door.'));
+        const pt = fl.pts.find(p => p.id === S.flzSel);
+        const fields = (o, upd) => {
+            root.append(numField('Height', () => f2(+o.z, 3), v => upd('z', Math.max(-3, Math.min(3, v))), '0.05', 'm'));
+            root.append(el('div', { class: 'row' }, el('label', null, 'Shape'), el('select', { class: 'grow', onchange: (e) => upd('shape', e.target.value) }, el('option', { value: 'round', selected: o.shape !== 'square' ? true : null }, 'Round'), el('option', { value: 'square', selected: o.shape === 'square' ? true : null }, 'Rectangle'))));
+            root.append(numField(o.shape === 'square' ? 'Half width (x)' : 'Flat radius', () => f2(+o.r), v => upd('r', Math.max(0, Math.min(30, v))), '0.1', 'm'));
+            if (o.shape === 'square') root.append(numField('Half depth (y)', () => f2(o.ry != null ? +o.ry : +o.r), v => upd('ry', Math.max(0, Math.min(30, v))), '0.1', 'm'));
+            root.append(numField('Slope length', () => f2(+o.slope), v => upd('slope', Math.max(0.01, Math.min(30, v))), '0.1', 'm'));
+        };
+        if (pt) {
+            root.append(el('div', { class: 'h' }, 'Selected point'));
+            fields(pt, (k, v) => setF(f => { const q = f.pts.find(p => p.id === pt.id); if (q) q[k] = v; }));
+            const grade = Math.abs(+pt.z - fl.base) / Math.max(0.01, +pt.slope);
+            root.append(el('div', { class: 'note' }, 'Slope ' + (grade * 100).toFixed(0) + '% (' + (Math.atan(grade) * 180 / Math.PI).toFixed(1) + '°)' + (grade > 0.25 ? ': steep for walking, make the slope longer' : '') + '.'));
+            root.append(el('div', { class: 'row wrap' }, pickBtn(pt.id, 'Height from the model'), el('button', { class: 'btn sm danger', onclick: () => { S.flzSel = null; setF(f => { f.pts = f.pts.filter(p => p.id !== pt.id); }); M.UI.renderLeft(); } }, 'Delete point')));
+        }
+        root.append(el('div', { class: 'h' }, 'New points (click the floor)'));
+        fields(n, (k, v) => { n[k] = v; M.UI.renderLeft(); });
+        root.append(el('div', { class: 'row wrap' }, pickBtn('new', 'Height from the model')));
+        if (fl.pts.length) root.append(el('div', { class: 'row' }, el('span', { class: 'note grow' }, fl.pts.length + ' point' + (fl.pts.length === 1 ? '' : 's')), el('button', { class: 'btn sm danger', onclick: () => { S.flzSel = null; setF(f => { f.pts = []; }); M.UI.renderLeft(); } }, 'Remove all points')));
+    }
+    UI2.floorPanel = floorPanel;
+    // ---------------- Atmosphere: the abandoned look ----------------
+    function atmosPanel(root) {
+        const P = S.project, sh = P.shell, a = sh.atmos || {}, A = M.Shell.atmosCfg(sh), LS = M.Mesher.LIGHT_STYLES;
+        const set = (fn) => Model.edit(Q => { Q.shell.atmos = Object.assign({ on: false, seed: 1, potholes: 0.5, damage: 0.5, grime: 0.6, brightness: 1, lights: 'warm' }, Q.shell.atmos); fn(Q.shell.atmos); });
+        const slider = (label, key, def, max, tip) => el('div', { class: 'row', title: tip }, el('label', null, label), el('input', { type: 'range', class: 'grow', min: '0', max: String(max || 1), step: '0.05', value: String(a[key] != null ? a[key] : def), onchange: (e) => set(o => { o[key] = +e.target.value; }) }), el('span', { style: { width: '34px', textAlign: 'right' } }, (a[key] != null ? +a[key] : def).toFixed(2)));
+        root.append(el('div', { class: 'row wrap' },
+            el('button', { class: 'btn sm primary', title: 'Grimy brick walls, cracked oily concrete floor, stained ceiling, potholes, broken walls, dirt, sodium lights with some dead and some flickering', onclick: () => {
+                Model.edit(Q => {
+                    Q.defaults.wallInt = 'old_brick'; Q.defaults.floor = 'old_concrete'; Q.defaults.ceiling = 'old_ceiling';
+                    (Q.shell.polys || []).forEach(pg => { delete pg.tex; delete pg.wtex; });
+                    Q.shell.atmos = Object.assign({ seed: 1, potholes: 0.5, damage: 0.5, grime: 0.7, brightness: 1 }, Q.shell.atmos, { on: true, lights: 'sodium' });
+                });
+                toast('Warehouse look on: grimy brick, cracked concrete, potholes, broken walls, dirt and old sodium lights. Paint any surface to change it.', 'ok'); M.UI.renderRight();
+            } }, 'Make it an abandoned warehouse'),
+            el('label', { class: 'chk' }, el('input', { type: 'checkbox', checked: A.on ? true : null, onchange: (e) => set(o => { o.on = e.target.checked; }) }), 'On')));
+        root.append(slider('Potholes', 'potholes', 0.5, 1, 'How many holes in the floor'));
+        root.append(slider('Broken walls', 'damage', 0.5, 1, 'How many chunks are knocked out of the walls'));
+        root.append(slider('Grime', 'grime', 0.6, 1, 'Dirt low on the walls, darker corners and dirty patches'));
+        root.append(el('div', { class: 'row' }, el('label', null, 'Variation'), el('span', { class: 'grow' }, '#' + A.seed), el('button', { class: 'btn sm', title: 'Other places for the potholes, holes and dead lights', onclick: () => set(o => { o.seed = ((o.seed | 0) % 9999) + 1 + Math.floor(Math.random() * 50); }) }, 'New random')));
+        root.append(el('div', { class: 'h' }, 'Light'));
+        root.append(el('div', { class: 'row' }, el('label', null, 'Ceiling lights'), el('select', { class: 'grow', onchange: (e) => set(o => { o.lights = e.target.value; }) }, ...Object.keys(LS).map(k => el('option', { value: k, selected: (a.lights || 'warm') === k ? true : null }, LS[k].name)))));
+        root.append(slider('Brightness', 'brightness', 1, 2.5, 'Scales the ambient light baked into the walls and the ceiling lights. Raise it if the interior looks black in the game.'));
+        root.append(el('div', { class: 'note' }, 'All of it is random but fixed: the same project looks the same every time. Dead and flickering lights, the dirt and the brightness show in the game after the export. ' + (A.on ? '' : 'Turn it on to see the potholes, broken walls and dirty wall bottoms here.')));
+    }
+    UI2.atmosPanel = atmosPanel;
     // a window cut from faces: its depth set so that its frame's room side (the bars are 7 cm deep) lies in the interior wall's face
     function flushCutter(k, quiet) {
         const kn = [-Math.sin(k.yaw), Math.cos(k.yaw)], w = M.ShellTools.wallFaceNear(k.cx, k.cy, [Math.cos(k.yaw), Math.sin(k.yaw)], 1.0);
@@ -450,6 +507,7 @@ window.MLO = window.MLO || {};
             root.append(numField('Raise by', () => '0', v => raise(v), '0.05', 'm'));
             root.append(el('div', { class: 'row wrap' }, ...[-0.5, -0.1, -0.05, 0.05, 0.1, 0.5].map(d => el('button', { class: 'btn sm', onclick: () => raise(d) }, (d > 0 ? '+' : '') + d))));
         }
+        if (t === 'flz') floorPanel(root);
         if (t === 'door') doorChooser(root);
         if (t === 'fit') M.FitModels.panel(root);
         if (t === 'plants') M.Plants.toolPanel(root);
@@ -768,6 +826,7 @@ window.MLO = window.MLO || {};
         { const info = el('div', { id: 'colinside' }); IM.colInsideFill(info); root.append(info); }
         });
         sec(root, 'v.clear', 'Clear the model out of the rooms', { panel: 'right', sum: IM.clearOn() ? 'on' : 'off' }, (root) => clearBlock(root));
+        sec(root, 'v.atmos', 'Atmosphere', { panel: 'right', sum: M.Shell.atmosCfg(P.shell).on ? 'abandoned' : 'clean' }, (root) => atmosPanel(root));
         sec(root, 'v.show', 'Show or hide', { panel: 'right' }, (root) => {
         root.append(chk('Ceiling', () => S.view.roof, v => { S.view.roof = v; }), chk('Floor', () => S.view.floor, v => { S.view.floor = v; }), chk('Walls', () => S.view.walls, v => { S.view.walls = v; }), chk('Grid', () => S.view.grid, v => { S.view.grid = v; M.App.renderer.showGrid = v; }));
         });

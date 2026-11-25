@@ -137,6 +137,42 @@ window.MLO = window.MLO || {};
         return segs;
     }
 
+    // ---------------- floor heights: shell.floorH = { base, pts: [{ id, x, y, z, r, ry, slope, shape: 'round' | 'square' }] } ----------------
+    // The floor is `base` high everywhere, except near a height point: flat at the point's height out to r (a square: r across, ry along y), then a
+    // straight slope `slope` metres long back to the floor around it. Where points overlap they are averaged. Heights are above the grid floor (0).
+    function floorCfg(shell) { const f = (shell && shell.floorH) || {}; return { base: +f.base || 0, pts: (f.pts || []).filter(p => isFinite(p.x) && isFinite(p.y) && isFinite(p.z)) }; }
+    function heightAt(fl, x, y) {
+        let sw = 0, sd = 0;
+        for (const p of fl.pts) {
+            const r = p.r != null ? +p.r : 1, sl = Math.max(0.01, p.slope != null ? +p.slope : 1.5);
+            const d = p.shape === 'square' ? Math.max(Math.abs(x - p.x) - r, Math.abs(y - p.y) - (p.ry != null ? +p.ry : r)) : Math.hypot(x - p.x, y - p.y) - r;
+            const w = d <= 0 ? 1 : 1 - d / sl; if (w <= 0) continue; sw += w; sd += w * (p.z - fl.base);
+        }
+        return fl.base + sd / Math.max(1, sw);
+    }
+    // ---------------- the abandoned look: shell.atmos = { on, seed, potholes, damage, grime } (amounts 0..1) ----------------
+    function atmosCfg(shell) { const a = (shell && shell.atmos) || {}; return { on: !!a.on, seed: (a.seed | 0) || 1, potholes: a.potholes != null ? +a.potholes : 0.5, damage: a.damage != null ? +a.damage : 0.5, grime: a.grime != null ? +a.grime : 0.6 }; }
+    // the same random numbers for the same seed (so a project looks the same every time it is opened)
+    function rng(seed) { let a = (seed | 0) ^ 0x9E3779B9; return () => { a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+    function hashNums(arr) { let h = 2166136261; arr.forEach(v => { h = Math.imul(h ^ (Math.round(v * 100) | 0), 16777619); }); return h; }
+    // a convex polygon ([x, y] corners) cut by a line: keeps the part where p[ax] >= v (keep > 0) or <= v (keep < 0)
+    function clipAx(poly, ax, v, keep) {
+        const out = []; for (let i = 0; i < poly.length; i++) {
+            const a = poly[i], b = poly[(i + 1) % poly.length], ia = (a[ax] - v) * keep >= -1e-9, ib = (b[ax] - v) * keep >= -1e-9;
+            if (ia) out.push(a);
+            if (ia !== ib) { const t = (v - a[ax]) / (b[ax] - a[ax]); const q = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]; q[ax] = v; out.push(q); }
+        }
+        return out;
+    }
+    const clipRect = (poly, x0, y0, x1, y1) => { let p = clipAx(poly, 0, x0, 1); if (p.length >= 3) p = clipAx(p, 0, x1, -1); if (p.length >= 3) p = clipAx(p, 1, y0, 1); if (p.length >= 3) p = clipAx(p, 1, y1, -1); return p.length >= 3 ? p : null; };
+    // a pothole: an uneven round hole; depth below the floor at (x, y) (0 outside it)
+    function potDepth(P, x, y) {
+        const dx = x - P.cx, dy = y - P.cy, d = Math.hypot(dx, dy); if (d > P.rad * 1.4) return 0;
+        const a = Math.atan2(dy, dx), rr = P.rad * (1 + 0.18 * Math.sin(3 * a + P.p1) + 0.1 * Math.sin(5 * a + P.p2) + 0.06 * Math.sin(9 * a + P.p3)), t = d / rr;
+        const prof = t < 0.7 ? 1 : (t < 1 ? 1 - ((t - 0.7) / 0.3) * ((t - 0.7) / 0.3) * (3 - 2 * (t - 0.7) / 0.3) : 0);
+        return P.depth * prof * (0.8 + 0.2 * Math.sin(x * 37 + P.p1) * Math.sin(y * 41 + P.p2));
+    }
+
     function build(project, opts) {
         opts = opts || {};
         const S = project.shell, cfg = project.settings, D = project.defaults;
@@ -150,7 +186,79 @@ window.MLO = window.MLO || {};
         const bmn = [1e9, 1e9, 1e9], bmx = [-1e9, -1e9, -1e9];
         const stats = { tris: 0, boxes: 0, portals: 0, lights: 0, warnings: [] };
 
+        const FL = floorCfg(S), ATM = atmosCfg(S);
+        const zOff = FL.base;                                                                    // walls' textures start at the floor (the dirty band sits on it)
+        let zLow = Math.min(0, FL.base, ...FL.pts.map(p => +p.z)); zLow = zLow < 0 ? zLow - 0.02 : 0;     // walls reach down to the lowest floor
+        // texture coordinates: square to the face (a slanted wall along its own length, so bricks are not stretched)
+        function uvOf(p, nx, ny, nz, tile) {
+            const ax = Math.abs(nx), ay = Math.abs(ny), az = Math.abs(nz);
+            if (az > ax && az > ay) return [p[0] / tile, p[1] / tile];
+            if (Math.min(ax, ay) > 0.02) { const h = Math.hypot(nx, ny); return [(-p[0] * ny + p[1] * nx) / h / tile, -(p[2] - zOff) / tile]; }
+            return ax >= ay ? [p[1] / tile, -(p[2] - zOff) / tile] : [p[0] / tile, -(p[2] - zOff) / tile];
+        }
+        // one triangle with its own texture coordinates (uvs null: worked out from flat points `flat`, else from the corners)
+        function emitRaw(kind, group, tex, pts, flat) {
+            const key = kind + '|' + group + '|' + tex + '|0'; let m = acc.get(key);
+            if (!m || m.pos.length / 3 + 3 > MAXV) { m = { level: 0, kind, group, tex, glass: false, pos: [], nrm: [], uv: [], idx: [] }; acc.set(key, m); batches.push(m); }
+            const a = pts[0], b = pts[1], c = pts[2], ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
+            let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx; const l = Math.hypot(nx, ny, nz); if (l < 1e-12) return; nx /= l; ny /= l; nz /= l;
+            const src = flat || pts, f = flat ? (() => { const p = flat, e1 = [p[1][0] - p[0][0], p[1][1] - p[0][1], p[1][2] - p[0][2]], e2 = [p[2][0] - p[0][0], p[2][1] - p[0][1], p[2][2] - p[0][2]]; const n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]], k = Math.hypot(n[0], n[1], n[2]) || 1; return [n[0] / k, n[1] / k, n[2] / k]; })() : [nx, ny, nz];
+            const tile = TEX.tile(tex), base = m.pos.length / 3;
+            pts.forEach((p, i) => { const uv = uvOf(src[i], f[0], f[1], f[2], tile); m.pos.push(p[0], p[1], p[2]); m.nrm.push(nx, ny, nz); m.uv.push(uv[0], uv[1]); for (let q = 0; q < 3; q++) { if (p[q] < bmn[q]) bmn[q] = p[q]; if (p[q] > bmx[q]) bmx[q] = p[q]; } });
+            m.idx.push(base, base + 1, base + 2); stats.tris += 1;
+        }
+        // A wall face (upright rectangle): down to the lowest floor; with the abandoned look, chunks knocked out of it and the dirty band at its bottom.
         function emitQuad(kind, group, tex, glass, a, b, c, d) {
+            if (glass || kind !== 'wall' || (!ATM.on && zLow === 0)) return emitQuad0(kind, group, tex, glass, a, b, c, d);
+            const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
+            let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx; const l = Math.hypot(nx, ny, nz); if (l < 1e-12) return; nx /= l; ny /= l; nz /= l;
+            const hl = Math.hypot(nx, ny); if (hl < 0.98) return emitQuad0(kind, group, tex, glass, a, b, c, d);
+            const tx = -ny / hl, ty = nx / hl, off = (a[0] * nx + a[1] * ny) / hl, S2 = [a, b, c, d].map(p => [p[0] * tx + p[1] * ty, p[2]]);
+            const s0 = Math.min(...S2.map(q => q[0])), s1 = Math.max(...S2.map(q => q[0])), z0r = Math.min(...S2.map(q => q[1])), z1 = Math.max(...S2.map(q => q[1]));
+            if (!S2.every(q => (Math.abs(q[0] - s0) < 1e-5 || Math.abs(q[0] - s1) < 1e-5) && (Math.abs(q[1] - z0r) < 1e-5 || Math.abs(q[1] - z1) < 1e-5))) return emitQuad0(kind, group, tex, glass, a, b, c, d);
+            const z0 = Math.abs(z0r) < 1e-6 ? zLow : z0r, P = (sv, z, dn) => [tx * sv + nx / hl * (off - (dn || 0)), ty * sv + ny / hl * (off - (dn || 0)), z];
+            const quad = (t, sa, sb, za, zb) => { if (sb - sa > 1e-5 && zb - za > 1e-5) emitQuad0(kind, group, t, false, P(sa, za), P(sb, za), P(sb, zb), P(sa, zb)); };
+            const dirtyOk = ATM.on && ATM.grime > 0.05 && !/^trim|^glass|_low$/.test(tex), band = zOff + TEX.tile(tex), texAt = (z) => (dirtyOk && z < band ? TEX.low(tex) : tex);
+            // a rectangle of the wall, split at the top of the dirty band
+            const piece = (sa, sb, za, zb) => { if (dirtyOk && za < band - 1e-4 && zb > band + 1e-4) { quad(texAt(za), sa, sb, za, band); quad(tex, sa, sb, band, zb); } else quad(texAt((za + zb) / 2), sa, sb, za, zb); };
+            const holes = ATM.on && ATM.damage > 0.01 && tex.indexOf('trim') !== 0 ? wallHoles(s0, s1, z0, z1, nx, ny, off) : [];
+            if (!holes.length) return piece(s0, s1, z0, z1);
+            // the face around the holes: cut into rectangles column by column
+            const xs = uniq([s0, s1].concat(...holes.map(h => [h.s0, h.s1]))).filter(v => v >= s0 - 1e-9 && v <= s1 + 1e-9);
+            for (let i = 0; i + 1 < xs.length; i++) {
+                const sa = xs[i], sb = xs[i + 1], m = (sa + sb) / 2, cut = holes.filter(h => h.s0 < m && h.s1 > m).sort((p, q) => p.z0 - q.z0); let zc = z0;
+                cut.forEach(h => { piece(sa, sb, zc, h.z0); zc = h.z1; }); piece(sa, sb, zc, z1);
+            }
+            // each hole: a fine grid pushed into the wall where the chunk is missing; the broken part shows rough masonry
+            holes.forEach(h => {
+                const nu = Math.max(2, Math.ceil((h.s1 - h.s0) / 0.04)), nv = Math.max(2, Math.ceil((h.z1 - h.z0) / 0.04)), V = [];
+                for (let j = 0; j <= nv; j++) { V.push([]); for (let i = 0; i <= nu; i++) { const sv = h.s0 + (h.s1 - h.s0) * i / nu, z = h.z0 + (h.z1 - h.z0) * j / nv, edge = i === 0 || j === 0 || i === nu || j === nv; V[j].push({ sv, z, dn: edge ? 0 : h.at(sv, z) }); } }
+                for (let j = 0; j < nv; j++) for (let i = 0; i < nu; i++) {
+                    const q = [V[j][i], V[j][i + 1], V[j + 1][i + 1], V[j + 1][i]], broken = q.some(v => v.dn > 0.003), t = broken ? 'old_broken' : texAt((q[0].z + q[2].z) / 2);
+                    [[0, 1, 2], [2, 3, 0]].forEach(tr => emitRaw(kind, group, t, tr.map(k => P(q[k].sv, q[k].z, q[k].dn)), tr.map(k => P(q[k].sv, q[k].z, 0))));
+                }
+            });
+        }
+        // Where chunks are knocked out of a wall face: a few per square metre (damage), never overlapping, kept off the edges. The same wall gets the
+        // same holes every time (the random numbers start from the seed and the wall's place).
+        function wallHoles(s0, s1, z0, z1, nx, ny, off) {
+            const W = s1 - s0, Hh = z1 - z0; if (W < 0.5 || Hh < 0.5) return [];
+            const r = rng(ATM.seed * 7919 + hashNums([nx, ny, off, s0, s1, z0, z1])), want = W * Hh * ATM.damage * 0.22; let n = Math.floor(want) + (r() < want % 1 ? 1 : 0);
+            const out = [];
+            for (let k = 0; k < n * 4 && out.length < n; k++) {
+                const big = r() < 0.25, w = big ? 0.35 + r() * 0.35 : 0.12 + r() * 0.25, h = big ? 0.25 + r() * 0.3 : 0.08 + r() * 0.2;
+                if (w > W - 0.1 || h > Hh - 0.25) continue;
+                const sa = s0 + 0.05 + r() * (W - 0.1 - w), za = z0 + 0.1 + Math.pow(r(), 1.6) * (Hh - 0.25 - h);      // (more of them low down, where things hit the wall)
+                if (out.some(o => sa < o.s1 + 0.05 && sa + w > o.s0 - 0.05 && za < o.z1 + 0.05 && za + h > o.z0 - 0.05)) continue;
+                const cs = sa + w / 2, cz = za + h / 2, dep = (big ? 0.04 : 0.02) + r() * 0.035, p1 = r() * 6.28, p2 = r() * 6.28, p3 = r() * 6.28;
+                out.push({ s0: sa, s1: sa + w, z0: za, z1: za + h, at: (sv, z) => {
+                    const dx = (sv - cs) / (w / 2), dz = (z - cz) / (h / 2), d = Math.hypot(dx, dz), a = Math.atan2(dz, dx), rr = 0.72 + 0.12 * Math.sin(3 * a + p1) + 0.07 * Math.sin(7 * a + p2) + 0.05 * Math.sin(13 * a + p3);
+                    return d < rr ? dep * (0.75 + 0.25 * Math.sin(sv * 53 + p1) * Math.sin(z * 47 + p2)) : 0;
+                } });
+            }
+            return out;
+        }
+        function emitQuad0(kind, group, tex, glass, a, b, c, d) {
             const key = kind + '|' + group + '|' + tex + '|' + (glass ? 1 : 0);
             let m = acc.get(key);
             if (!m || m.pos.length / 3 + 4 > MAXV) { m = { level: 0, kind, group, tex, glass: !!glass, pos: [], nrm: [], uv: [], idx: [] }; acc.set(key, m); batches.push(m); }
@@ -160,7 +268,7 @@ window.MLO = window.MLO || {};
             const tile = glass ? 1 : TEX.tile(tex), ax = Math.abs(nx), ay = Math.abs(ny), az = Math.abs(nz), base = m.pos.length / 3;
             [a, b, c, d].forEach(p => {
                 m.pos.push(p[0], p[1], p[2]); m.nrm.push(nx, ny, nz);
-                if (ax >= ay && ax >= az) m.uv.push(p[1] / tile, -p[2] / tile); else if (ay >= ax && ay >= az) m.uv.push(p[0] / tile, -p[2] / tile); else m.uv.push(p[0] / tile, p[1] / tile);
+                const uv = uvOf(p, nx, ny, nz, tile); m.uv.push(uv[0], uv[1]);
                 for (let q = 0; q < 3; q++) { if (p[q] < bmn[q]) bmn[q] = p[q]; if (p[q] > bmx[q]) bmx[q] = p[q]; }
             });
             m.idx.push(base, base + 1, base + 2, base + 2, base + 3, base); stats.tris += 2;
@@ -174,7 +282,7 @@ window.MLO = window.MLO || {};
             const tile = TEX.tile(tex), ax = Math.abs(nx), ay = Math.abs(ny), az = Math.abs(nz), base = m.pos.length / 3;
             [a, b, c].forEach(p => {
                 m.pos.push(p[0], p[1], p[2]); m.nrm.push(nx, ny, nz);
-                if (ax >= ay && ax >= az) m.uv.push(p[1] / tile, -p[2] / tile); else if (ay >= ax && ay >= az) m.uv.push(p[0] / tile, -p[2] / tile); else m.uv.push(p[0] / tile, p[1] / tile);
+                const uv = uvOf(p, nx, ny, nz, tile); m.uv.push(uv[0], uv[1]);
                 for (let q = 0; q < 3; q++) { if (p[q] < bmn[q]) bmn[q] = p[q]; if (p[q] > bmx[q]) bmx[q] = p[q]; }
             });
             m.idx.push(base, base + 1, base + 2); stats.tris += 1;
@@ -192,6 +300,7 @@ window.MLO = window.MLO || {};
             pq(kind, group, tex, false, 'z', z1, x0, x1, y0, y1, 1); pq(kind, group, tex, false, 'z', z0, x0, x1, y0, y1, -1);
         }
         function cbox(x0, y0, z0, x1, y1, z1, type, room) {
+            if (z0 === 0 && z1 > 0.3) z0 = zLow;
             if (!wantBoxes) return;
             if (x1 - x0 < 1e-4 || y1 - y0 < 1e-4 || z1 - z0 < 1e-4) return;
             const mk = type + '|' + room; let mi = matIdx.get(mk);
@@ -201,6 +310,7 @@ window.MLO = window.MLO || {};
         // a collision box that is turned about Z (the ones the user draws): the first six numbers are the box around it, the eighth says how it really stands
         function cboxO(cx, cy, z0, z1, hu, hn, yaw, type, room, id) {
             if (!wantBoxes) return;
+            if (z0 === 0 && z1 > 0.3 && id == null) z0 = zLow;
             if (hu < 5e-5 || hn < 5e-5 || z1 - z0 < 1e-4) return;
             const mk = type + '|' + room; let mi = matIdx.get(mk);
             if (mi === undefined) { mi = matList.length; matList.push([type, room]); matIdx.set(mk, mi); }
@@ -209,12 +319,12 @@ window.MLO = window.MLO || {};
             boxes.push([cx - ex, cy - ey, z0, cx + ex, cy + ey, z1, mi, square ? { user: id } : { user: id, cx, cy, hu, hn, yaw }]);          // (square to the grid: the box around it is the box)
         }
         // a three-sided upright prism (floor and ceiling of an angled room): tri = three [x, y] corners
-        function cprism(tri, z0, z1, type, room) {
+        function cprism(tri, z0, z1, type, room, zt) {
             if (!wantBoxes) return;
             const mk = type + '|' + room; let mi = matIdx.get(mk);
             if (mi === undefined) { mi = matList.length; matList.push([type, room]); matIdx.set(mk, mi); }
             const xs = tri.map(q => q[0]), ys = tri.map(q => q[1]);
-            boxes.push([Math.min(...xs), Math.min(...ys), z0, Math.max(...xs), Math.max(...ys), z1, mi, { prism: tri.map(q => [q[0], q[1]]) }]);
+            boxes.push([Math.min(...xs), Math.min(...ys), z0, Math.max(...xs), Math.max(...ys), zt ? Math.max(...zt) : z1, mi, zt ? { prism: tri.map(q => [q[0], q[1]]), zt } : { prism: tri.map(q => [q[0], q[1]]) }]);
         }
 
         // ---------------- region, floors, ceiling ----------------
@@ -567,6 +677,7 @@ window.MLO = window.MLO || {};
 
         // ---------------- lights: one per ~3.5 m of every room (rooms are cut apart by partitions, doors and arches stay open) ----------------
         if (exportMode && opts.autoLights !== false) {
+            const LSP = ATM.on && (S.atmos.lights || 'warm') !== 'warm' ? 4.5 : 3.5;          // (a warehouse: lights further apart)
             const px = [], py = [];
             (S.parts || []).forEach(pt => { if (pt.o === 'H') { py.push(pt.c); px.push(pt.u0, pt.u1); } else { px.push(pt.c); py.push(pt.u0, pt.u1); } });
             const g2 = regionGrid(S, px, py), comp = [], blockedH = (i, j) => false;
@@ -598,9 +709,11 @@ window.MLO = window.MLO || {};
                 let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9, area = 0;
                 cs.forEach(c => { x0 = Math.min(x0, g2.X[c[0]]); x1 = Math.max(x1, g2.X[c[0] + 1]); y0 = Math.min(y0, g2.Y[c[1]]); y1 = Math.max(y1, g2.Y[c[1] + 1]); area += (g2.X[c[0] + 1] - g2.X[c[0]]) * (g2.Y[c[1] + 1] - g2.Y[c[1]]); });
                 if (area < 1.0) return;
-                const nx = Math.max(1, Math.round((x1 - x0) / 3.5)), ny = Math.max(1, Math.round((y1 - y0) / 3.5)), seen = new Set();
+                const nx = Math.max(1, Math.round((x1 - x0) / LSP)), ny = Math.max(1, Math.round((y1 - y0) / LSP)), seen = new Set();
                 for (let a = 0; a < nx; a++) for (let b = 0; b < ny; b++) {
                     const cx = x0 + (a + 0.5) * (x1 - x0) / nx, cy = y0 + (b + 0.5) * (y1 - y0) / ny;
+                    // the grid point itself when it lies in the room, else the middle of the nearest piece of the room (an L-shaped room)
+                    if (cs.some(c => cx >= g2.X[c[0]] && cx < g2.X[c[0] + 1] && cy >= g2.Y[c[1]] && cy < g2.Y[c[1] + 1])) { lights.push({ x: cx, y: cy, z: H - 0.15 }); continue; }
                     let best = null, bd = 1e9;
                     cs.forEach(c => { const mx = (g2.X[c[0]] + g2.X[c[0] + 1]) / 2, my = (g2.Y[c[1]] + g2.Y[c[1] + 1]) / 2, d = Math.hypot(mx - cx, my - cy); if (d < bd) { bd = d; best = [mx, my]; } });
                     const lk = best[0].toFixed(2) + ',' + best[1].toFixed(2); if (seen.has(lk)) continue; seen.add(lk);
@@ -612,7 +725,7 @@ window.MLO = window.MLO || {};
                 const p = pg.pts; let la = 0, ang = 0; p.forEach((a, i) => { const b = p[(i + 1) % p.length], l = Math.hypot(b[0] - a[0], b[1] - a[1]); if (l > la) { la = l; ang = Math.atan2(b[1] - a[1], b[0] - a[0]); } });
                 const c = Math.cos(ang), s = Math.sin(ang), loc = p.map(q => [q[0] * c + q[1] * s, -q[0] * s + q[1] * c]); let u0 = 1e9, u1 = -1e9, v0 = 1e9, v1 = -1e9;
                 loc.forEach(q => { u0 = Math.min(u0, q[0]); u1 = Math.max(u1, q[0]); v0 = Math.min(v0, q[1]); v1 = Math.max(v1, q[1]); });
-                const nu = Math.max(1, Math.round((u1 - u0) / 3.5)), nv = Math.max(1, Math.round((v1 - v0) / 3.5)); let n = 0;
+                const nu = Math.max(1, Math.round((u1 - u0) / LSP)), nv = Math.max(1, Math.round((v1 - v0) / LSP)); let n = 0;
                 for (let a = 0; a < nu; a++) for (let b = 0; b < nv; b++) { const u = u0 + (a + 0.5) * (u1 - u0) / nu, v = v0 + (b + 0.5) * (v1 - v0) / nv, x = u * c - v * s, y = u * s + v * c; if (inPoly(p, x, y)) { lights.push({ x, y, z: H - 0.15 }); n++; } }
                 if (!n) { const tr = triangulate(p)[0]; if (tr) lights.push({ x: (p[tr[0]][0] + p[tr[1]][0] + p[tr[2]][0]) / 3, y: (p[tr[0]][1] + p[tr[1]][1] + p[tr[2]][1]) / 3, z: H - 0.15 }); }
             });
@@ -622,6 +735,69 @@ window.MLO = window.MLO || {};
         batches.forEach(b => { b.pos = new Float32Array(b.pos); b.nrm = new Float32Array(b.nrm); b.uv = new Float32Array(b.uv); b.idx = new Uint16Array(b.idx); });
         stats.boxes = boxes.length; stats.portals = portals.length; stats.lights = lights.length;
         const resolved = []; segs.forEach(sg => sg.ops.forEach(op => resolved.push({ o: sg.o, c: sg.c, inward: sg.inward, u0: op.u0, u1: op.u1, z0: op.z0, z1: op.z1, type: op.type, entrance: op.entrance })));
+        // ---------------- the floor: raised, lowered, sloped by the height points, with potholes ----------------
+        if (FL.base !== 0 || FL.pts.length || (ATM.on && ATM.potholes > 0.01)) {
+            const old = batches.filter(m => m.kind === 'floor' && m.group === 'int'), tris = [];
+            old.forEach(m => { for (let i = 0; i < m.idx.length; i += 3) { const P = (k) => [m.pos[m.idx[i + k] * 3], m.pos[m.idx[i + k] * 3 + 1]]; tris.push({ tex: m.tex, p: [P(0), P(1), P(2)] }); } stats.tris -= m.idx.length / 3; });
+            for (let i = batches.length - 1; i >= 0; i--) if (old.indexOf(batches[i]) >= 0) batches.splice(i, 1);
+            acc.forEach((m, k) => { if (old.indexOf(m) >= 0) acc.delete(k); });
+            // potholes: each sits in its own 0.5 m square of the floor (or a block of 2 x 2), well inside the rooms
+            const SC = 0.5, pots = new Map();
+            if (ATM.on && ATM.potholes > 0.01 && tris.length) {
+                const r = rng(ATM.seed * 104729 + 17), areas = tris.map(t => Math.abs((t.p[1][0] - t.p[0][0]) * (t.p[2][1] - t.p[0][1]) - (t.p[2][0] - t.p[0][0]) * (t.p[1][1] - t.p[0][1])) / 2), total = areas.reduce((a, b) => a + b, 0);
+                const n = Math.round(total * ATM.potholes * 0.08), free = (i, j) => !pots.has(i + ',' + j) && [[0, 0], [1, 0], [1, 1], [0, 1], [0.5, 0.5]].every(o => inRegion((i + o[0]) * SC, (j + o[1]) * SC));
+                for (let k = 0, made = 0; k < n * 6 && made < n; k++) {
+                    let pick = r() * total, ti = 0; while (ti < areas.length - 1 && pick > areas[ti]) { pick -= areas[ti]; ti++; }
+                    const t = tris[ti].p; let a = r(), b = r(); if (a + b > 1) { a = 1 - a; b = 1 - b; }
+                    const x = t[0][0] + (t[1][0] - t[0][0]) * a + (t[2][0] - t[0][0]) * b, y = t[0][1] + (t[1][1] - t[0][1]) * a + (t[2][1] - t[0][1]) * b;
+                    const big = r() < 0.25, i = Math.floor(x / SC), j = Math.floor(y / SC);
+                    const cells = big ? [[i, j], [i + 1, j], [i, j + 1], [i + 1, j + 1]] : [[i, j]];
+                    if (!cells.every(c => free(c[0], c[1]))) continue;
+                    const half = big ? SC : SC / 2, rad = big ? 0.2 + r() * 0.12 : 0.08 + r() * 0.08, room = half - rad * 1.42 - 0.01;
+                    const P = { cx: (big ? (i + 1) * SC : (i + 0.5) * SC) + (r() * 2 - 1) * room, cy: (big ? (j + 1) * SC : (j + 0.5) * SC) + (r() * 2 - 1) * room, rad, depth: (big ? 0.045 : 0.025) + r() * 0.04, p1: r() * 6.28, p2: r() * 6.28, p3: r() * 6.28 };
+                    cells.forEach(c => pots.set(c[0] + ',' + c[1], P)); made++;
+                }
+            }
+            // every floor triangle cut into the 0.5 m squares (finer in a pothole's square); the cut points of an edge are the same for the triangles on
+            // both sides of it, so the floor stays closed when it bends. In a pothole square the points on its edges follow the square's straight edge.
+            const hAt = (x, y) => heightAt(FL, x, y), hc = new Map(), hCorner = (i, j) => { const k = i + ',' + j; let v = hc.get(k); if (v === undefined) { v = hAt(i * SC, j * SC); hc.set(k, v); } return v; };
+            tris.forEach(t => {
+                const xs = t.p.map(q => q[0]), ys = t.p.map(q => q[1]);
+                for (let i = Math.floor(Math.min(...xs) / SC - 1e-9); i * SC < Math.max(...xs) - 1e-9; i++) for (let j = Math.floor(Math.min(...ys) / SC - 1e-9); j * SC < Math.max(...ys) - 1e-9; j++) {
+                    const piece = clipRect(t.p, i * SC, j * SC, (i + 1) * SC, (j + 1) * SC); if (!piece) continue;
+                    const P = pots.get(i + ',' + j);
+                    const fan = (poly, zf) => { for (let k = 1; k + 1 < poly.length; k++) { const q = [poly[0], poly[k], poly[k + 1]]; emitRaw('floor', 'int', t.tex, q.map(v => [v[0], v[1], zf(v[0], v[1])]), q.map(v => [v[0], v[1], 0])); } };
+                    if (!P) { fan(piece, hAt); continue; }
+                    const x0 = i * SC, y0 = j * SC, x1 = x0 + SC, y1 = y0 + SC, NF = 7, f = SC / NF;
+                    const zf = (x, y) => {
+                        const ex = Math.abs(x - x0) < 1e-7 || Math.abs(x - x1) < 1e-7, ey = Math.abs(y - y0) < 1e-7 || Math.abs(y - y1) < 1e-7;
+                        if (ex || ey) {                                                                                   // on the square's edge: straight between its corners
+                            const ci = Math.abs(x - x1) < 1e-7 ? i + 1 : i, cj = Math.abs(y - y1) < 1e-7 ? j + 1 : j;
+                            if (ex && ey) return hCorner(ci, cj);
+                            if (ex) { const t2 = (y - y0) / SC; return hCorner(ci, j) * (1 - t2) + hCorner(ci, j + 1) * t2; }
+                            const t2 = (x - x0) / SC; return hCorner(i, cj) * (1 - t2) + hCorner(i + 1, cj) * t2;
+                        }
+                        return hAt(x, y) - potDepth(P, x, y);
+                    };
+                    for (let a = 0; a < NF; a++) for (let b = 0; b < NF; b++) { const q = clipRect(piece, x0 + a * f, y0 + b * f, x0 + (a + 1) * f, y0 + (b + 1) * f); if (q) fan(q, zf); }
+                }
+            });
+            // collision of the floor: the old flat boxes go; the floor as prisms 1 m across that follow its heights (not into the potholes), or the
+            // boxes moved up or down when the floor is only raised or lowered
+            if (wantBoxes) {
+                const isFloor = (b) => b[2] === -0.35 && b[5] === 0, kept = boxes.filter(b => !isFloor(b)), flat = boxes.filter(isFloor);
+                boxes.length = 0; kept.forEach(b => boxes.push(b));
+                if (!FL.pts.length) flat.forEach(b => { const c = b.slice(); c[2] += FL.base; c[5] += FL.base; boxes.push(c); });
+                else tris.forEach(t => {
+                    const xs = t.p.map(q => q[0]), ys = t.p.map(q => q[1]), C = 1.0;
+                    for (let i = Math.floor(Math.min(...xs) / C - 1e-9); i * C < Math.max(...xs) - 1e-9; i++) for (let j = Math.floor(Math.min(...ys) / C - 1e-9); j * C < Math.max(...ys) - 1e-9; j++) {
+                        const q = clipRect(t.p, i * C, j * C, (i + 1) * C, (j + 1) * C); if (!q) continue;
+                        for (let k = 1; k + 1 < q.length; k++) { const tri = [q[0], q[k], q[k + 1]], zt = tri.map(v => hAt(v[0], v[1])); cprism(tri, Math.min(...zt) - 0.35, 0, TEX.colType(t.tex), 1, zt); }
+                    }
+                });
+            }
+        }
+
         return { batches, boxes, matList, portals, lights, entrance: null, bounds: { mn: bmn, mx: bmx }, stats, shell: { grid: g, segs, resolved } };
     }
 
@@ -646,5 +822,5 @@ window.MLO = window.MLO || {};
         return out;
     }
 
-    M.Shell = { build, regionGrid, regionRects, gridRects, roomBoxes, polyBoxes, stripBoxes, polysOf, cleanPoly, inPoly, inset, triangulate, hasRooms, boundary, OPEN, uniq };
+    M.Shell = { build, heightAt: (shell, x, y) => heightAt(floorCfg(shell), x, y), floorCfg, atmosCfg, regionGrid, regionRects, gridRects, roomBoxes, polyBoxes, stripBoxes, polysOf, cleanPoly, inPoly, inset, triangulate, hasRooms, boundary, OPEN, uniq };
 })(window.MLO);

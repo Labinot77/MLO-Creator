@@ -249,7 +249,7 @@ window.MLO = window.MLO || {};
         if (M.FitModels.dragging()) { M.FitModels.move(e); return; }
         if (rd) { roomMove(e); return; }
         if (lvl) { levelMove(e); return; }
-        if (!drag) { if (S.shellTool === 'room' || S.shellTool === 'cut' || S.shellTool === 'part' || S.shellTool === 'poly' || S.shellTool === 'floor' || S.shellTool === 'paint' || S.shellTool === 'select' || SH.busy()) SH.move(e); return; }
+        if (!drag) { if (S.shellTool === 'room' || S.shellTool === 'cut' || S.shellTool === 'part' || S.shellTool === 'poly' || S.shellTool === 'flz' || S.shellTool === 'floor' || S.shellTool === 'paint' || S.shellTool === 'select' || SH.busy()) SH.move(e); return; }
         const k = drag.k0, cs = Math.cos(k.yaw), sn = Math.sin(k.yaw), n = [-sn, cs], ray = hover.ray;
         const dn = ray.d[0] * n[0] + ray.d[1] * n[1]; if (Math.abs(dn) < 0.04) return;
         const t = ((k.cx - ray.o[0]) * n[0] + (k.cy - ray.o[1]) * n[1]) / dn; if (t < 0) return;
@@ -1098,7 +1098,7 @@ window.MLO = window.MLO || {};
         } else if (t === 'plants') {
             const r = M.Plants.tool.draw(R); if (r) { text = r.text; at = r.at; }
         }
-        if (t === 'room' || t === 'cut' || t === 'part' || t === 'poly' || t === 'floor' || t === 'select' || t === 'eraser' || t === 'paint') SH.draw(R, label);
+        if (t === 'room' || t === 'cut' || t === 'part' || t === 'poly' || t === 'flz' || t === 'floor' || t === 'select' || t === 'eraser' || t === 'paint') SH.draw(R, label);
         else label(text, at);
         if (t === 'select') drawRoomSel(R); else M.App.canvas.style.cursor = t === 'cbox' ? cbCursor() : '';
     }

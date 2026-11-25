@@ -16,6 +16,43 @@ window.MLO = window.MLO || {};
         const a = hash(x0, y0, seed), b = hash(x1, y0, seed), c = hash(x0, y1, seed), d = hash(x1, y1, seed);
         return a + (b - a) * fx + (c - a) * fy + (a - b - c + d) * fx * fy;
     }
+    // value noise that repeats every px across and py down (streaks: many across, few down)
+    function vn2(x, y, px, py, seed) {
+        const xi = Math.floor(x), yi = Math.floor(y); let fx = x - xi, fy = y - yi;
+        fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy);
+        const x0 = ((xi % px) + px) % px, x1 = (x0 + 1) % px, y0 = ((yi % py) + py) % py, y1 = (y0 + 1) % py;
+        const a = hash(x0, y0, seed), b = hash(x1, y0, seed), c = hash(x0, y1, seed), d = hash(x1, y1, seed);
+        return a + (b - a) * fx + (c - a) * fy + (a - b - c + d) * fx * fy;
+    }
+    // cells (Worley), repeating every n: distance to the nearest and second nearest point; their difference is small along the cracks between cells
+    function worley(u, v, n, seed) {
+        const x = u * n, y = v * n, xi = Math.floor(x), yi = Math.floor(y); let f1 = 9, f2 = 9;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+            const cx = xi + dx, cy = yi + dy, wx = ((cx % n) + n) % n, wy = ((cy % n) + n) % n, d = Math.hypot(cx + hash(wx, wy, seed) - x, cy + hash(wx, wy, seed + 1) - y);
+            if (d < f1) { f2 = f1; f1 = d; } else if (d < f2) f2 = d;
+        }
+        return f2 - f1;
+    }
+    const sstep = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+    const mix = (c, d, t) => [c[0] + (d[0] - c[0]) * t, c[1] + (d[1] - c[1]) * t, c[2] + (d[2] - c[2]) * t];
+    // Age on top of a material: w = { dirt, stains, streaks, cracks, eff (salt), rust, oil, chips, seed }, each 0..1
+    function weather(u, v, c, w) {
+        const s = w.seed || 7;
+        if (w.dirt) { const k = 1 - w.dirt * Math.max(0, fbm(u, v, 2, s) - 0.3) * 1.5; c = mix(c, [c[0] * k + 10 * (1 - k), c[1] * k + 7 * (1 - k), c[2] * k], 1); }
+        if (w.stains) c = mix(c, [c[0] * 0.5 + 20, c[1] * 0.5 + 14, c[2] * 0.45 + 6], sstep(0.55, 0.72, fbm(u + 0.37, v + 0.11, 3, s + 5)) * w.stains);
+        if (w.streaks) { const m = sstep(0.55, 0.85, vn2(u * 28, v * 2, 28, 2, s + 9)) * sstep(0.3, 0.7, fbm(u, v, 2, s + 3)) * w.streaks; c = mix(c, [c[0] * 0.55 + 8, c[1] * 0.55 + 8, c[2] * 0.55 + 6], m); }
+        if (w.eff) c = mix(c, [206, 202, 192], sstep(0.62, 0.78, fbm(u, v, 4, s + 17)) * w.eff * 0.7);
+        if (w.rust) { const m = sstep(0.52, 0.75, fbm(u, v, 3, s + 19) * 0.7 + vn2(u * 20, v * 3, 20, 3, s + 21) * 0.3) * w.rust, g = fbm(u, v, 8, s + 25); c = mix(c, [86 + 40 * g, 48 + 18 * g, 30 + 8 * g], m * 0.85); }
+        if (w.oil) c = mix(c, [c[0] * 0.3, c[1] * 0.3, c[2] * 0.32], sstep(0.64, 0.7, fbm(u + 0.5, v + 0.2, 2, s + 23)) * w.oil);
+        if (w.chips) { const m = sstep(0.8, 0.86, vnoise(u * 40, v * 40, 40, s + 29)) * w.chips; c = mix(c, [c[0] * 0.6, c[1] * 0.58, c[2] * 0.56], m * 0.7); }
+        if (w.cracks) {
+            // the crack lines wander (the position is pushed around by noise) and only show where a second noise lets them: broken, not a net
+            const wu = u + (fbm(u, v, 4, s + 31) - 0.5) * 0.08, wv = v + (fbm(u, v, 4, s + 33) - 0.5) * 0.08, e = worley(((wu % 1) + 1) % 1, ((wv % 1) + 1) % 1, 4, s + 11);
+            const m = sstep(1 - w.cracks * 0.55, 1.05 - w.cracks * 0.55, fbm(u, v, 3, s + 13)), k = sstep(0.03, 0.006, e) * m; c = mix(c, [c[0] * 0.3, c[1] * 0.3, c[2] * 0.3], k);
+        }
+        return c;
+    }
+
     function fbm(u, v, cells, seed) {
         let s = 0, amp = 0.5, tot = 0, per = cells;
         for (let o = 0; o < 4; o++) { s += amp * vnoise(u * per, v * per, per, seed + o * 17); tot += amp; amp *= 0.5; per *= 2; }
@@ -85,6 +122,19 @@ window.MLO = window.MLO || {};
             const k = (0.86 + 0.14 * s) * (1 + (g - 0.5) * 0.05 + (n - 0.5) * 0.08);
             return [p.base[0] * k, p.base[1] * k, p.base[2] * k];
         },
+        // paint peeling off what is under it (p.under: [kind, params]); its edges curl and darken
+        peel(u, v, p) {
+            const n = fbm(u, v, 4, p.seed || 71) + (vnoise(u * 32, v * 32, 32, (p.seed || 71) + 1) - 0.5) * 0.12, t = p.peel || 0.5;
+            if (n > t + 0.03) return K[p.under[0]](u, v, p.under[1]);
+            const paint = K.flat(u, v, p); return n > t ? mix(paint, [paint[0] * 0.6, paint[1] * 0.6, paint[2] * 0.6], 0.9) : paint;
+        },
+        // broken masonry: a chunk is knocked out, the rough inside shows (the damage in walls)
+        rubble(u, v, p) {
+            const e = worley(u, v, 9, 41), n = fbm(u, v, 6, 43), g = vnoise(u * SIZE / 2, v * SIZE / 2, SIZE / 2, 45);
+            const k = (0.7 + n * 0.5) * (0.92 + (g - 0.5) * 0.25) * (e < 0.06 ? 0.6 : 1);
+            const c = mix(p.base, p.b, sstep(0.45, 0.6, fbm(u, v, 3, 47)));
+            return [c[0] * k, c[1] * k, c[2] * k];
+        },
         panel(u, v, p) {
             const base = K.flat(u, v, p), np = p.n || 2, fu = (u * np) % 1, fv = (v * np) % 1;
             const du = Math.min(fu, 1 - fu) * SIZE / np, dv = Math.min(fv, 1 - fv) * SIZE / np;
@@ -144,10 +194,21 @@ window.MLO = window.MLO || {};
         ['metal_sheet', 'Corrugated Steel', 'Metal', 1.0, 'corrugated', { base: C(150, 154, 156), ribs: 12 }],
         ['trim_white', 'White Trim', 'Trim', 1.0, 'flat', { base: C(236, 236, 232), amp: 0.01, grain: 0.015, seed: 61 }],
         ['trim_dark', 'Dark Trim', 'Trim', 1.0, 'flat', { base: C(60, 56, 52), amp: 0.02, grain: 0.02, seed: 63 }],
-        ['trim_wood', 'Wood Trim', 'Trim', 1.0, 'flat', { base: C(112, 80, 56), amp: 0.06, grain: 0.04, seed: 65 }]
+        ['trim_wood', 'Wood Trim', 'Trim', 1.0, 'flat', { base: C(112, 80, 56), amp: 0.06, grain: 0.04, seed: 65 }],
+        // old and left to rot: warehouses, lock-ups, basements
+        ['old_brick', 'Grimy Brick', 'Abandoned', 0.9, 'brick', { cols: 4, rows: 12, base: C(128, 70, 54), mortar: C(150, 142, 128), vary: 0.18, w: { dirt: 0.7, stains: 0.5, streaks: 0.5, eff: 0.35, chips: 0.8, seed: 81 } }],
+        ['old_brick_dark', 'Sooty Brick', 'Abandoned', 0.9, 'brick', { cols: 4, rows: 12, base: C(92, 60, 50), mortar: C(110, 104, 96), vary: 0.2, w: { dirt: 0.9, stains: 0.6, streaks: 0.7, chips: 1, seed: 83 } }],
+        ['old_brick_paint', 'Peeling Paint on Brick', 'Abandoned', 0.9, 'peel', { base: C(196, 192, 176), amp: 0.06, grain: 0.04, peel: 0.52, seed: 85, under: ['brick', { cols: 4, rows: 12, base: C(130, 72, 56), mortar: C(150, 142, 128), vary: 0.18 }], w: { dirt: 0.6, stains: 0.5, streaks: 0.6, seed: 86 } }],
+        ['old_block', 'Stained Block Wall', 'Abandoned', 1.0, 'brick', { cols: 2, rows: 5, base: C(140, 138, 130), mortar: C(112, 110, 104), mw: 3, vary: 0.08, w: { dirt: 0.7, stains: 0.6, streaks: 0.8, eff: 0.2, chips: 0.6, seed: 87 } }],
+        ['old_concrete_wall', 'Streaked Concrete', 'Abandoned', 1.0, 'flat', { base: C(146, 145, 140), amp: 0.14, grain: 0.08, pits: 0.01, seed: 89, w: { dirt: 0.8, stains: 0.6, streaks: 1, cracks: 0.5, seed: 90 } }],
+        ['old_concrete', 'Cracked Concrete Floor', 'Abandoned', 1.5, 'flat', { base: C(128, 126, 120), amp: 0.16, grain: 0.09, pits: 0.012, seed: 91, w: { dirt: 0.9, stains: 0.7, cracks: 1, oil: 0.8, chips: 0.6, seed: 92 } }],
+        ['old_concrete_dark', 'Oily Concrete Floor', 'Abandoned', 1.5, 'flat', { base: C(96, 95, 92), amp: 0.16, grain: 0.09, pits: 0.012, seed: 93, w: { dirt: 0.8, stains: 0.8, cracks: 0.8, oil: 1, chips: 0.8, seed: 94 } }],
+        ['old_metal', 'Rusted Steel Sheet', 'Abandoned', 1.0, 'corrugated', { base: C(122, 124, 120), ribs: 12, w: { dirt: 0.6, rust: 0.9, streaks: 0.7, seed: 95 } }],
+        ['old_ceiling', 'Water-stained Ceiling', 'Abandoned', 1.0, 'panel', { base: C(176, 172, 160), amp: 0.08, grain: 0.05, n: 2, seed: 97, w: { dirt: 0.6, stains: 0.9, streaks: 0.2, seed: 98 } }],
+        ['old_broken', 'Broken Masonry', 'Abandoned', 0.6, 'rubble', { base: C(118, 74, 60), b: C(132, 128, 120) }]
     ];
     // collision surface type by category (values the game's own pack uses)
-    const COL = { Brick: 1, Stone: 1, Concrete: 1, Plaster: 101, Tile: 81, Wood: 72, Roof: 1, Carpet: 101, Metal: 1, Trim: 101 };
+    const COL = { Brick: 1, Stone: 1, Concrete: 1, Plaster: 101, Tile: 81, Wood: 72, Roof: 1, Carpet: 101, Metal: 1, Trim: 101, Abandoned: 1 };
 
     const byId = {}, cache = {};
     const cats = [];
@@ -161,14 +222,29 @@ window.MLO = window.MLO || {};
     function generate(id) {
         const d = byId[id]; if (!d) return null;
         const data = new Uint8ClampedArray(SIZE * SIZE * 4); let r = 0, g = 0, b = 0;
-        const fn = K[d.kind];
+        if (d.kind === 'low') return lowVariant(d);
+        const fn = K[d.kind], w = d.params.w;
         for (let y = 0; y < SIZE; y++) for (let x = 0; x < SIZE; x++) {
-            const c = fn((x + 0.5) / SIZE, (y + 0.5) / SIZE, d.params), o = (y * SIZE + x) * 4;
+            const u = (x + 0.5) / SIZE, v = (y + 0.5) / SIZE; let c = fn(u, v, d.params); if (w) c = weather(u, v, c, w); const o = (y * SIZE + x) * 4;
             data[o] = clamp8(c[0]); data[o + 1] = clamp8(c[1]); data[o + 2] = clamp8(c[2]); data[o + 3] = 255;
             r += data[o]; g += data[o + 1]; b += data[o + 2];
         }
         const n = SIZE * SIZE;
         return { id, def: d, size: SIZE, data, avg: [r / n / 255, g / n / 255, b / n / 255] };
+    }
+
+    // The bottom of a wall gone dirty: the texture with grime rising from its lower edge (splashes, damp, scuffs). Exactly one repeat high, so on a wall
+    // it fills the band from the floor to one tile up and lines up with the clean texture above it.
+    function lowVariant(d) {
+        const src = TEX.pixels(d.of), n = src.size, data = new Uint8ClampedArray(src.data); let r = 0, g = 0, b = 0;
+        for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+            const u = (x + 0.5) / n, v = (y + 0.5) / n, rise = 0.45 + 0.35 * vn2(u * 6, 0, 6, 1, 101) + 0.12 * vn2(u * 40, 0, 40, 1, 103);
+            let m = sstep(1 - rise, 1 - rise * 0.25, v) * (0.7 + 0.3 * fbm(u, v, 4, 105));
+            const o = (y * n + x) * 4, k = 1 - 0.68 * m;
+            data[o] = clamp8(data[o] * k + 10 * m); data[o + 1] = clamp8(data[o + 1] * k + 8 * m); data[o + 2] = clamp8(data[o + 2] * k + 3 * m);
+            r += data[o]; g += data[o + 1]; b += data[o + 2];
+        }
+        const t = n * n; return { id: d.id, def: d, size: n, data, avg: [r / t / 255, g / t / 255, b / t / 255] };
     }
 
     const TEX = {
@@ -200,6 +276,12 @@ window.MLO = window.MLO || {};
             return (TEX.gl[key] = tx);
         },
         resetGL() { TEX.gl = {}; },
+        // the dirty-bottom version of a texture (registered on first use; its own name, so it exports as its own texture)
+        low(id) {
+            const base = byId[id] ? id : 'plaster_cream', lid = base + '_low';
+            if (!byId[lid]) { const d = byId[base]; byId[lid] = { id: lid, name: d.name + ' (dirty bottom)', cat: d.cat, tile: d.tile, kind: 'low', of: base, params: {}, col: d.col }; }
+            return lid;
+        },
         // Photographs that ship with the program (ui\tex\*.png): square tiles that repeat, 512 x 512 (twice the size of the generated ones), listed first under "Wood".
         // `tile` is how many metres one tile covers.
         PHOTOS: [

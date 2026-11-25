@@ -23,7 +23,7 @@ namespace MloCreator
     }
 
     class MatData { public string Tex; public bool Glass; public float[] Pos, Nrm, Uv; public int[] Idx; public byte[] Col; }
-    class LightData { public double X, Y, Z; public int R, G, B, Flags; public double Intensity, Falloff, Exponent; }
+    class LightData { public double X, Y, Z; public int R, G, B, Flags; public bool Buzz; public double Intensity, Falloff, Exponent; }
     class GroupData
     {
         public string Name; public int Room, Flags; public double Lod;
@@ -412,7 +412,7 @@ namespace MloCreator
                         Dictionary<string, object> ld = J.O(lo);
                         LightData l = new LightData(); l.X = J.D(J.G(ld, "x"), 0); l.Y = J.D(J.G(ld, "y"), 0); l.Z = J.D(J.G(ld, "z"), 2);
                         l.R = J.I(J.G(ld, "r"), 255); l.G = J.I(J.G(ld, "g"), 238); l.B = J.I(J.G(ld, "b"), 210);
-                        l.Intensity = J.D(J.G(ld, "intensity"), 4); l.Falloff = J.D(J.G(ld, "falloff"), 6); l.Exponent = J.D(J.G(ld, "exponent"), 24);
+                        l.Intensity = J.D(J.G(ld, "intensity"), 4); l.Falloff = J.D(J.G(ld, "falloff"), 6); l.Exponent = J.D(J.G(ld, "exponent"), 24); l.Buzz = J.B(J.G(ld, "buzz"), false);
                         g.Lights.Add(l);
                     }
                     if (g.Mats.Count > 0) groups.Add(g);
@@ -485,7 +485,7 @@ namespace MloCreator
                 // ---- baked ambient light (Ambient.cs) ----
                 List<GroupData> doorGroups = new List<GroupData>(); List<V3> doorAt = new List<V3>();
                 foreach (FitDoor fd in fit.Doors) { doorGroups.Add(fd.G); doorAt.Add(new V3(fd.D.X, fd.D.Y, fd.D.Z)); }
-                BakeAmbient(groups, doorGroups, doorAt, portals, log);
+                BakeAmbient(groups, doorGroups, doorAt, portals, J.O(J.G(model, "atmos")), log);
 
                 // ---- write game files ----
                 YtdFile ytd = XmlYtd.GetYtd(txdXml, ddsDir);

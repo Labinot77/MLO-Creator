@@ -8,10 +8,11 @@ window.MLO = window.MLO || {};
     const kit = () => M.UI.kit;
     const toast = (t, k) => bus.emit('toast', { text: t, kind: k });
 
-    const TOOLS = [['room', 'Add room', '1'], ['poly', 'Angled room', '8'], ['cut', 'Cut out', '2'], ['part', 'Partition', '3'], ['door', 'Door', '4'], ['window', 'Window', '5'], ['arch', 'Archway', '6'], ['floor', 'Floor paint', '7'], ['select', 'Select', 'V'], ['eraser', 'Eraser', 'X']];
+    const TOOLS = [['room', 'Add room', '1'], ['poly', 'Angled room', '8'], ['flz', 'Floor height', '9'], ['cut', 'Cut out', '2'], ['part', 'Partition', '3'], ['door', 'Door', '4'], ['window', 'Window', '5'], ['arch', 'Archway', '6'], ['floor', 'Floor paint', '7'], ['select', 'Select', 'V'], ['eraser', 'Eraser', 'X']];
     const HELP = {
         room: 'Drag a rectangle to add it to the interior. Corners snap to the house\'s walls and to 5 cm.',
         poly: 'Click the corners of a room with walls at any angle; click the first corner (or Enter) to close it. Backspace undoes a corner.',
+        flz: 'Raise or lower the whole floor, or click the floor for a height point with a slope around it (ramps, pits, docks).',
         cut: 'Drag a rectangle to take it out of the interior (a column, a closet, a bay you do not want).',
         part: 'Drag a straight line to build an interior wall. It snaps to the other walls. Put doors in it with the Door tool.',
         door: 'Click a wall to cut a doorway (0.9 x 2.1 m). Works on interior walls and on the house walls. Click it again to fill it in.',
@@ -106,6 +107,8 @@ window.MLO = window.MLO || {};
         root.append(el('div', { class: 'h' }, (TOOLS.filter(x => x[0] === t)[0] || ['', 'Tool'])[1]), el('div', { class: 'note' }, HELP[t] || ''));
         if (t === 'floor') root.append(el('div', { class: 'row' }, el('label', null, 'Floor'), k.swatchEl(S.brush.floor, 28), el('span', { class: 'grow' }, TEX.def(S.brush.floor).name), el('button', { class: 'btn sm', onclick: () => { S.paintTarget = 'floor'; M.App.setTab('paint'); } }, 'Change')));
 
+        if (t === 'flz' && M.ImportUI && M.ImportUI.floorPanel) M.ImportUI.floorPanel(root);
+        if (M.ImportUI && M.ImportUI.atmosPanel) { root.append(el('div', { class: 'h' }, 'Atmosphere')); M.ImportUI.atmosPanel(root); }
         VU.renderSelected(root, k);
         VU.renderRectangles(root, k);
     };

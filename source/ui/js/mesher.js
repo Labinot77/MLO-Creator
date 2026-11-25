@@ -390,6 +390,13 @@ window.MLO = window.MLO || {};
     }
 
     // ---------- export model for the C# exporter ----------
+    // ceiling light styles: colour, strength, reach; with the abandoned look on, how many are dead and how many flicker
+    const LIGHT_STYLES = {
+        warm: { name: 'Warm (home)', col: [255, 238, 210], intensity: 4, falloff: 6, dead: 0, flicker: 0 },
+        sodium: { name: 'Sodium (old warehouse)', col: [255, 196, 120], intensity: 5, falloff: 8, dead: 0.2, flicker: 0.15 },
+        tube: { name: 'Cold tubes (fluorescent)', col: [214, 232, 255], intensity: 5, falloff: 7, dead: 0.15, flicker: 0.25 },
+        dim: { name: 'Dim and dying', col: [255, 214, 160], intensity: 2.5, falloff: 6, dead: 0.35, flicker: 0.3 }
+    };
     function toExport(project, built, extra) {
         const groups = {
             ext: { name: 'ext', room: 0, flags: 1572864, lod: 500, mats: [], lights: [] },
@@ -409,8 +416,12 @@ window.MLO = window.MLO || {};
             for (let i = 0; i < b.idx.length; i++) m.idx.push(b.idx[i] + off);
             if (!b.glass) usedTex.add(b.tex);
         });
-        const L = extra.light || {};
-        groups.int.lights = built.lights.slice(0, 48).map(l => ({ x: l.x, y: l.y, z: l.z, r: 255, g: 238, b: 210, intensity: L.intensity || 4, falloff: L.falloff || 6, exponent: L.exponent || 24 }));
+        const L = extra.light || {}, A = M.Shell.atmosCfg(project.shell), sty = LIGHT_STYLES[(project.shell.atmos && project.shell.atmos.lights) || 'warm'] || LIGHT_STYLES.warm;
+        const bright = A.on && project.shell.atmos.brightness != null ? +project.shell.atmos.brightness : 1;
+        // the light style: colour and strength; an abandoned place has some lights dead and some flickering (the same ones every export, from the seed)
+        let rnd = 0x2545F491 ^ (A.seed * 9973); const r01 = () => { rnd ^= rnd << 13; rnd ^= rnd >>> 17; rnd ^= rnd << 5; return ((rnd >>> 0) % 100000) / 100000; };
+        const all = built.lights.slice(0, 48), deadMax = all.length > 2 ? Math.floor(all.length * sty.dead) : 0; let deadN = 0;          // (a small room keeps its lights)
+        groups.int.lights = all.map(l => { const dead = A.on && deadN < deadMax && r01() < sty.dead * 1.5 && ++deadN > 0, buzz = A.on && r01() < sty.flicker; return dead ? null : { x: l.x, y: l.y, z: l.z, r: sty.col[0], g: sty.col[1], b: sty.col[2], intensity: (L.intensity || sty.intensity) * bright, falloff: L.falloff || sty.falloff, exponent: L.exponent || 24, buzz }; }).filter(Boolean);
         const outGroups = Object.keys(groups).map(k => groups[k]).filter(g => g.mats.length > 0).map(g => ({
             name: g.name, room: g.room, flags: g.flags, lod: g.lod, lights: g.lights,
             mats: g.mats.map(m => ({ tex: m.tex, glass: m.glass, pos: M.toB64(new Float32Array(m.pos)), nrm: M.toB64(new Float32Array(m.nrm)), uv: M.toB64(new Float32Array(m.uv)), idx: M.toB64(new Int32Array(m.idx)) }))
@@ -421,7 +432,7 @@ window.MLO = window.MLO || {};
             const x0 = b[0], y0 = b[1], z0 = b[2], x1 = b[3], y1 = b[4], z1 = b[5], mi = b[6], v = verts.length / 3, o = b[7];
             if (o && o.prism) {
                 // a three-sided prism (floor or ceiling of an angled room): corners counter-clockwise from above
-                const q = o.prism; q.forEach(p => verts.push(p[0], p[1], z0)); q.forEach(p => verts.push(p[0], p[1], z1));
+                const q = o.prism; q.forEach(p => verts.push(p[0], p[1], z0)); q.forEach((p, i) => verts.push(p[0], p[1], o.zt ? o.zt[i] : z1));
                 tris.push(v + 2, v + 1, v, mi, v + 3, v + 4, v + 5, mi);
                 for (let i = 0; i < 3; i++) { const j = (i + 1) % 3; tris.push(v + i, v + j, v + 3 + j, mi, v + 3 + j, v + 3 + i, v + i, mi); }
                 return;
@@ -440,11 +451,12 @@ window.MLO = window.MLO || {};
         return Object.assign({
             groups: outGroups,
             collision: { mats: built.matList, verts: M.toB64(new Float32Array(verts)), tris: M.toB64(new Int32Array(tris)) },
-            portals: built.portals, textures
+            portals: built.portals, textures,
+            atmos: { grime: A.on ? A.grime : 0, brightness: bright, floor: M.Shell.floorCfg(project.shell).base }
         }, extra.model || {});
     }
 
-    M.Mesher = { build, toExport, stairInfo, stairLanding, OPEN, DIRS };
+    M.Mesher = { LIGHT_STYLES, build, toExport, stairInfo, stairLanding, OPEN, DIRS };
 })(window.MLO);
 
 
